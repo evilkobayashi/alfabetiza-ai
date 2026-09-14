@@ -4,7 +4,7 @@ import { useState } from "react";
 import VoiceRecorder from "@/components/VoiceRecorder";
 import { Smile, Brain, BookOpen } from "lucide-react";
 
-type Profile = "KIDS" | "PCD";
+type Profile = "KIDS" | "PCD" | "EJA";
 
 export default function Home() {
   const [profile, setProfile] = useState<Profile>("KIDS");
@@ -46,16 +46,34 @@ export default function Home() {
     </div>
   );
 
+  // THEME 3: EJA (Jovens, Adultos e Idosos) - Maduro, Respeitoso, Letras Grandes, Estilo Bancário
+  const EJATheme = () => (
+    <div className="flex-1 flex flex-col items-center w-full max-w-2xl mx-auto space-y-10">
+      <div className="text-center space-y-4 w-full p-6 border-b border-slate-200">
+        <div className="inline-flex items-center justify-center p-3 bg-slate-800 rounded-xl mb-2">
+          <BookOpen className="w-8 h-8 text-white" />
+        </div>
+        <h2 className="text-3xl md:text-4xl font-semibold text-slate-800 tracking-tight">
+          Portal do Aluno
+        </h2>
+        <p className="text-xl text-slate-500 font-normal">
+          Pressione o microfone para ditar sua dúvida.
+        </p>
+      </div>
+      <VoiceRecorder profile="EJA" animationsEnabled={true} />
+    </div>
+  );
+
   return (
     <main className={`min-h-screen flex flex-col p-4 md:p-8 transition-all duration-700 ${
-      profile === "KIDS" 
-        ? "bg-[#E0F2FE] font-sans" // Sky-100
-        : "bg-[#F8FAFC] font-sans tracking-wide" // Slate-50, tipografia mais legível
+      profile === "KIDS" ? "bg-[#E0F2FE] font-sans" :
+      profile === "PCD"  ? "bg-[#F8FAFC] font-sans tracking-wide" :
+                           "bg-slate-50 font-serif" // EJA Theme (Elegante e clássico)
     }`}>
       
-      {/* HEADER DE TESTE (Para você trocar os perfis rapidamente) */}
-      <header className="w-full flex justify-end mb-8">
-        <div className="flex bg-white/50 backdrop-blur-md p-1 rounded-full shadow-sm border border-black/5">
+      {/* HEADER DE TESTE */}
+      <header className="w-full flex justify-end mb-8 overflow-x-auto pb-4">
+        <div className="flex bg-white/50 backdrop-blur-md p-1 rounded-full shadow-sm border border-black/5 min-w-max">
           <button
             onClick={() => setProfile("KIDS")}
             className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${
@@ -70,13 +88,23 @@ export default function Home() {
               profile === "PCD" ? "bg-teal-600 text-white shadow-md scale-105" : "text-slate-500 hover:bg-white"
             }`}
           >
-            Modo Inclusão (PCD)
+            Modo Inclusão
+          </button>
+          <button
+            onClick={() => setProfile("EJA")}
+            className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${
+              profile === "EJA" ? "bg-slate-800 text-white shadow-md scale-105" : "text-slate-500 hover:bg-white"
+            }`}
+          >
+            Modo Adulto (EJA)
           </button>
         </div>
       </header>
 
       {/* RENDERIZAÇÃO DO TEMA */}
-      {profile === "KIDS" ? <KidsTheme /> : <PCDTheme />}
+      {profile === "KIDS" && <KidsTheme />}
+      {profile === "PCD" && <PCDTheme />}
+      {profile === "EJA" && <EJATheme />}
 
     </main>
   );

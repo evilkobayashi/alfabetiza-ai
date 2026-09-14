@@ -88,6 +88,12 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
       if (isProcessing) return "bg-blue-300 opacity-90";
       return "bg-teal-600 hover:bg-teal-700 opacity-90 transition-colors";
     }
+    if (profile === "EJA") {
+      // Estilo sério, cores sóbrias (Slate/Blue escuro), sem gradientes
+      if (isRecording) return "bg-red-600 ring-4 ring-red-200";
+      if (isProcessing) return "bg-slate-500";
+      return "bg-slate-800 hover:bg-slate-700 transition-all shadow-md";
+    }
     return "bg-slate-800"; // Fallback
   };
 
@@ -112,12 +118,16 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
       </button>
 
       {/* Label Instrucional Adaptativo */}
-      <p className={`font-semibold text-center px-4 ${profile === "PCD" ? "text-xl text-teal-900 tracking-wide" : "text-2xl text-sky-800"}`}>
+      <p className={`font-semibold text-center px-4 ${
+        profile === "PCD" ? "text-xl text-teal-900 tracking-wide" : 
+        profile === "EJA" ? "text-xl text-slate-600" : 
+        "text-2xl text-sky-800"
+      }`}>
         {isRecording 
-          ? (profile === "PCD" ? "Gravando... Pode falar." : "Tô te ouvindo! 👂") 
+          ? (profile === "PCD" ? "Gravando... Pode falar." : profile === "EJA" ? "Gravando. Fale pausadamente." : "Tô te ouvindo! 👂") 
           : isProcessing 
-          ? (profile === "PCD" ? "Processando resposta..." : "A IA tá pensando! 🧠") 
-          : (profile === "PCD" ? "Aperte o botão para falar" : "Aperte o microfone para brincar!")}
+          ? (profile === "PCD" ? "Processando resposta..." : profile === "EJA" ? "Processando o áudio..." : "A IA tá pensando! 🧠") 
+          : (profile === "PCD" ? "Aperte o botão para falar" : profile === "EJA" ? "Pressione para ditar" : "Aperte o microfone para brincar!")}
       </p>
 
       {/* Caixa de Transcrição / Resposta da IA */}
@@ -125,10 +135,12 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
         <div className={`w-full p-6 rounded-3xl transition-opacity duration-500 ${
           profile === "KIDS" 
             ? "bg-white shadow-xl border-4 border-yellow-300 text-2xl font-bold text-sky-900" 
+            : profile === "EJA"
+            ? "bg-white border border-slate-300 text-xl text-slate-800 shadow-sm rounded-xl font-serif"
             : "bg-[#FDFBF7] border-2 border-teal-200 text-xl leading-loose tracking-wider text-slate-800 shadow-sm"
         }`}>
           <div className="flex items-start gap-4">
-            <Volume2 className={profile === "KIDS" ? "text-yellow-500 w-8 h-8 shrink-0 animate-pulse" : "text-teal-600 w-6 h-6 shrink-0"} />
+            <Volume2 className={profile === "KIDS" ? "text-yellow-500 w-8 h-8 shrink-0 animate-pulse" : profile === "EJA" ? "text-slate-500 w-6 h-6 shrink-0" : "text-teal-600 w-6 h-6 shrink-0"} />
             <p>{transcription}</p>
           </div>
         </div>
