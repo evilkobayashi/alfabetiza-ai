@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { Mic, Square, Loader2, Volume2 } from "lucide-react";
 
 interface VoiceRecorderProps {
   profile: "KIDS" | "EJA" | "PCD";
+  animationsEnabled?: boolean;
 }
 
-export default function VoiceRecorder({ profile }: VoiceRecorderProps) {
+export default function VoiceRecorder({ profile, animationsEnabled = true }: VoiceRecorderProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [transcription, setTranscription] = useState("");
@@ -23,17 +25,13 @@ export default function VoiceRecorder({ profile }: VoiceRecorderProps) {
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
 
       mediaRecorder.onstop = async () => {
         setIsProcessing(true);
         const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         await sendAudioToBackend(audioBlob);
-        
-        // Stop all tracks to release microphone
         stream.getTracks().forEach((track) => track.stop());
       };
 
@@ -41,7 +39,7 @@ export default function VoiceRecorder({ profile }: VoiceRecorderProps) {
       setIsRecording(true);
     } catch (error) {
       console.error("Erro ao acessar microfone:", error);
-      alert("Permissão de microfone necessária.");
+      alert("Permissão de microfone necessária para aprender a ler!");
     }
   };
 
@@ -58,60 +56,81 @@ export default function VoiceRecorder({ profile }: VoiceRecorderProps) {
     formData.append("profile", profile);
 
     try {
-      // Usar a URL do Backend local (Railway local ou uvicorn)
       const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      
-      const response = await fetch(`${API_URL}/api/voice/chat`, {
-        method: "POST",
-        body: formData,
-      });
+      const response = await fetch(`${API_URL}/api/voice/chat`, { method: "POST", body: formData });
 
       if (!response.ok) throw new Error("Falha na API de Voz");
-
       const data = await response.json();
       setTranscription(data.transcription_or_reasoning);
 
       if (data.audio_base64) {
-        // Toca o áudio retornado pelo Google Cloud TTS
         const audioSrc = `data:${data.mime_type};base64,${data.audio_base64}`;
         const audioPlayer = new Audio(audioSrc);
         audioPlayer.play();
       }
     } catch (error) {
-      console.error("Erro no envio:", error);
-      setTranscription("Ops! Tivemos um problema na conexão.");
+      setTranscription("Ops! Tivemos um problema de conexão.");
     } finally {
       setIsProcessing(false);
     }
   };
 
-  return (
-    <div className="flex flex-col items-center justify-center p-6 space-y-8">
-      {/* Visual Feedback area */}
-      <div className={`w-32 h-32 rounded-full flex items-center justify-center transition-all duration-300 ${
-        isRecording ? "bg-red-500 animate-pulse scale-110 shadow-lg shadow-red-500/50" : 
-        isProcessing ? "bg-blue-500 animate-bounce shadow-lg shadow-blue-500/50" : 
-        "bg-green-500 hover:bg-green-400 hover:scale-105 cursor-pointer shadow-lg shadow-green-500/30"
-      }`}
-      onMouseDown={isRecording ? stopRecording : startRecording}
-      onMouseUp={stopRecording}
-      onTouchStart={isRecording ? stopRecording : startRecording}
-      onTouchEnd={stopRecording}
-      >
-        <span className="text-white text-5xl">
-          {isRecording ? "🎙️" : isProcessing ? "🧠" : "🎤"}
-        </span>
-      </div>
+  // Adaptação Visual do Botão baseado no Perfil
+  const getButtonStyles = () => {
+    if (profile === "KIDS") {
+      if (isRecording) return "bg-red-500 scale-110 shadow-[0_0_40px_rgba(239,68,68,0.6)] animate-pulse";
+      if (isProcessing) return "bg-blue-400 animate-bounce";
+      return "bg-gradient-to-tr from-green-400 to-emerald-500 hover:scale-105 shadow-xl hover:shadow-green-400/50";
+    }
+    if (profile === "PCD") {
+      // Sem animações bruscas, cores sólidas de baixo contraste
+      if (isRecording) return "bg-red-400 opacity-90";
+      if (isProcessing) return "bg-blue-300 opacity-90";
+      return "bg-teal-600 hover:bg-teal-700 opacity-90 transition-colors";
+    }
+    return "bg-slate-800"; // Fallback
+  };
 
-      <p className="text-gray-500 font-medium text-center">
-        {isRecording ? "Segure para falar, solte para enviar..." : 
-         isProcessing ? "A IA está pensando..." : 
-         "Pressione e segure o microfone para falar com o tutor"}
+  return (
+    <div className="flex flex-col items-center justify-center w-full max-w-md mx-auto space-y-8">
+      
+      {/* Botão de Gravação Principal */}
+      <button 
+        className={`w-32 h-32 md:w-40 md:h-40 rounded-full flex items-center justify-center transition-all duration-300 ${getButtonStyles()}`}
+        onMouseDown={isRecording ? stopRecording : startRecording}
+        onMouseUp={stopRecording}
+        onTouchStart={isRecording ? stopRecording : startRecording}
+        onTouchEnd={stopRecording}
+      >
+        {isRecording ? (
+          <Square className="w-12 h-12 md:w-16 md:h-16 text-white fill-white" />
+        ) : isProcessing ? (
+          <Loader2 className={`w-12 h-12 md:w-16 md:h-16 text-white ${animationsEnabled ? "animate-spin" : ""}`} />
+        ) : (
+          <Mic className="w-14 h-14 md:w-20 md:h-20 text-white" />
+        )}
+      </button>
+
+      {/* Label Instrucional Adaptativo */}
+      <p className={`font-semibold text-center px-4 ${profile === "PCD" ? "text-xl text-teal-900 tracking-wide" : "text-2xl text-sky-800"}`}>
+        {isRecording 
+          ? (profile === "PCD" ? "Gravando... Pode falar." : "Tô te ouvindo! 👂") 
+          : isProcessing 
+          ? (profile === "PCD" ? "Processando resposta..." : "A IA tá pensando! 🧠") 
+          : (profile === "PCD" ? "Aperte o botão para falar" : "Aperte o microfone para brincar!")}
       </p>
 
+      {/* Caixa de Transcrição / Resposta da IA */}
       {transcription && (
-        <div className="max-w-md w-full bg-white/50 backdrop-blur-md p-4 rounded-xl border border-gray-100 shadow-sm mt-8 text-center">
-          <p className="text-gray-800 text-lg">{transcription}</p>
+        <div className={`w-full p-6 rounded-3xl transition-opacity duration-500 ${
+          profile === "KIDS" 
+            ? "bg-white shadow-xl border-4 border-yellow-300 text-2xl font-bold text-sky-900" 
+            : "bg-[#FDFBF7] border-2 border-teal-200 text-xl leading-loose tracking-wider text-slate-800 shadow-sm"
+        }`}>
+          <div className="flex items-start gap-4">
+            <Volume2 className={profile === "KIDS" ? "text-yellow-500 w-8 h-8 shrink-0 animate-pulse" : "text-teal-600 w-6 h-6 shrink-0"} />
+            <p>{transcription}</p>
+          </div>
         </div>
       )}
     </div>
