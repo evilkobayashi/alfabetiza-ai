@@ -1,13 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import VoiceRecorder from "@/components/VoiceRecorder";
 import { Smile, Brain, BookOpen } from "lucide-react";
 
 type Profile = "KIDS" | "PCD" | "EJA";
 
-export default function Home() {
-  const [profile, setProfile] = useState<Profile>("KIDS");
+function SalaContent() {
+  const searchParams = useSearchParams();
+  const queryProfile = searchParams.get('perfil') as Profile;
+  const [profile, setProfile] = useState<Profile>(queryProfile || "KIDS");
+
+  useEffect(() => {
+    if (queryProfile) {
+      setProfile(queryProfile);
+    }
+  }, [queryProfile]);
 
   // THEME 1: Crianças (5-8 anos) - Lúdico, cores vibrantes, fontes gordinhas
   const KidsTheme = () => (
@@ -108,4 +117,13 @@ export default function Home() {
 
     </main>
   );
+}
+
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50 text-sky-600">Carregando Sala...</div>}>
+      <SalaContent />
+    </Suspense>
+  )
 }
