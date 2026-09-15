@@ -18,8 +18,10 @@ export async function GET(request: NextRequest) {
     const cookieStore = await cookies()
     const redirectResponse = NextResponse.redirect(`${origin}${next}`)
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ueybwjekfxxoyqjisfsj.supabase.co'
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_KIyib5jaW95brAa2OZne8Q_LVGhYlAV'
+    const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseUrl = (rawUrl && !rawUrl.includes('kayovfwqqkmuvgnogtwv')) ? rawUrl : 'https://ueybwjekfxxoyqjisfsj.supabase.co'
+    const rawKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    const supabaseAnonKey = (rawKey && !rawKey.includes('GRQzA5OhlSGqYuBMTO1kQg')) ? rawKey : 'sb_publishable_KIyib5jaW95brAa2OZne8Q_LVGhYlAV'
 
     const supabase = createServerClient(
       supabaseUrl,

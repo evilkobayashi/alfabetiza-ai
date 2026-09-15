@@ -1,14 +1,14 @@
 import { createBrowserClient } from '@supabase/ssr'
 
 function getValidUrl(url?: string): string {
-  if (url && (url.startsWith('http://') || url.startsWith('https://')) && !url.includes('placeholder')) {
+  if (url && (url.startsWith('http://') || url.startsWith('https://')) && !url.includes('placeholder') && !url.includes('kayovfwqqkmuvgnogtwv')) {
     return url
   }
   return 'https://ueybwjekfxxoyqjisfsj.supabase.co'
 }
 
 function getValidKey(key?: string): string {
-  if (key && key.length > 20 && !key.includes('placeholder') && !key.includes('[SENSITIVE]')) {
+  if (key && key.length > 20 && !key.includes('placeholder') && !key.includes('[SENSITIVE]') && !key.includes('GRQzA5OhlSGqYuBMTO1kQg')) {
     return key
   }
   return 'sb_publishable_KIyib5jaW95brAa2OZne8Q_LVGhYlAV'
