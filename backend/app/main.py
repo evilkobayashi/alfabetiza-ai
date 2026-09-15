@@ -11,8 +11,13 @@ app = FastAPI(
 # CORS para o PWA (Next.js)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Trocar para a URL da Vercel no futuro
-    allow_credentials=True,
+    allow_origins=[
+        "https://alfabetiza-ai.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "*",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

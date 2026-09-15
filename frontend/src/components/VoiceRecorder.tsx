@@ -56,10 +56,14 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
     formData.append("profile", profile);
 
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://alfabetiza-ai-production.up.railway.app";
       const response = await fetch(`${API_URL}/api/voice/chat`, { method: "POST", body: formData });
 
-      if (!response.ok) throw new Error("Falha na API de Voz");
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error("Erro na API de Voz:", response.status, errText);
+        throw new Error("Falha na API de Voz");
+      }
       const data = await response.json();
       setTranscription(data.transcription_or_reasoning);
 
