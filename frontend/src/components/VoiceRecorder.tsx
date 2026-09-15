@@ -18,24 +18,46 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      let mimeType = 'audio/webm';
+      if (typeof MediaRecorder !== 'undefined') {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          mimeType = 'audio/webm;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+          mimeType = 'audio/webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+          mimeType = 'audio/ogg';
+        }
+      }
+
+      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
       };
 
       mediaRecorder.onstop = async () => {
         setIsProcessing(true);
-        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const actualMime = mimeType ? mimeType.split(';')[0] : 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: actualMime });
         await sendAudioToBackend(audioBlob);
         stream.getTracks().forEach((track) => track.stop());
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(250);
       setIsRecording(true);
     } catch (error) {
       console.error("Erro ao acessar microfone:", error);
@@ -45,7 +67,9 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
       setIsRecording(false);
     }
   };
@@ -104,13 +128,18 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
   return (
     <div className="flex flex-col items-center justify-center w-full max-w-md mx-auto space-y-8">
       
-      {/* Botão de Gravação Principal */}
+      {/* Botão de Gravação Principal (Clique para Falar / Clique para Enviar) */}
       <button 
-        className={`w-32 h-32 md:w-40 md:h-40 rounded-full flex items-center justify-center transition-all duration-300 ${getButtonStyles()}`}
-        onMouseDown={isRecording ? stopRecording : startRecording}
-        onMouseUp={stopRecording}
-        onTouchStart={isRecording ? stopRecording : startRecording}
-        onTouchEnd={stopRecording}
+        type="button"
+        disabled={isProcessing}
+        onClick={() => {
+          if (isRecording) {
+            stopRecording();
+          } else if (!isProcessing) {
+            startRecording();
+          }
+        }}
+        className={`w-32 h-32 md:w-40 md:h-40 rounded-full flex items-center justify-center transition-all duration-300 cursor-pointer ${getButtonStyles()}`}
       >
         {isRecording ? (
           <Square className="w-12 h-12 md:w-16 md:h-16 text-white fill-white" />
@@ -128,10 +157,10 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
         "text-2xl text-sky-800"
       }`}>
         {isRecording 
-          ? (profile === "PCD" ? "Gravando... Pode falar." : profile === "EJA" ? "Gravando. Fale pausadamente." : "Tô te ouvindo! 👂") 
+          ? (profile === "PCD" ? "Gravando... Clique no quadrado para enviar." : profile === "EJA" ? "Gravando... Clique no quadrado para enviar." : "Tô te ouvindo! Clique no quadrado quando terminar! 👂") 
           : isProcessing 
           ? (profile === "PCD" ? "Processando resposta..." : profile === "EJA" ? "Processando o áudio..." : "A IA tá pensando! 🧠") 
-          : (profile === "PCD" ? "Aperte o botão para falar" : profile === "EJA" ? "Pressione para ditar" : "Aperte o microfone para brincar!")}
+          : (profile === "PCD" ? "Clique no microfone para falar" : profile === "EJA" ? "Clique no microfone para falar" : "Clique no microfone para falar!")}
       </p>
 
       {/* Caixa de Transcrição / Resposta da IA */}
