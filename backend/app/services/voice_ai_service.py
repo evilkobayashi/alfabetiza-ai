@@ -53,17 +53,37 @@ async def process_audio_interaction(
     logger.info(f"Processando áudio para o perfil: {profile}")
     
     # 1. Pipeline de Entrada (Gemini Native Audio)
-    response = client.models.generate_content(
-        model='gemini-1.5-flash',
-        contents=[
-            {"mime_type": mime_type, "data": audio_bytes},
-            "Ouça o áudio do aluno e responda seguindo estritamente as suas diretrizes de sistema. Seja conciso."
-        ],
-        config=genai.types.GenerateContentConfig(
-            system_instruction=sys_prompt,
-            temperature=0.7,
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    try:
+        audio_part = genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+    except Exception:
+        audio_part = genai.types.Part(inline_data=genai.types.Blob(data=audio_bytes, mime_type=mime_type))
+
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[
+                audio_part,
+                "Ouça o áudio do aluno e responda seguindo estritamente as suas diretrizes de sistema. Seja conciso."
+            ],
+            config=genai.types.GenerateContentConfig(
+                system_instruction=sys_prompt,
+                temperature=0.7,
+            )
         )
-    )
+    except Exception as model_err:
+        logger.warning(f"Falha com modelo {model_name}, tentando gemini-1.5-flash: {model_err}")
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=[
+                audio_part,
+                "Ouça o áudio do aluno e responda seguindo estritamente as suas diretrizes de sistema. Seja conciso."
+            ],
+            config=genai.types.GenerateContentConfig(
+                system_instruction=sys_prompt,
+                temperature=0.7,
+            )
+        )
     
     resposta_texto = response.text
     logger.info(f"Resposta IA: {resposta_texto}")
