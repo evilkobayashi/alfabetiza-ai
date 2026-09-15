@@ -67,12 +67,13 @@ async def process_audio_interaction(
         audio_part = genai.types.Part(inline_data=genai.types.Blob(data=audio_bytes, mime_type=mime_type))
 
     user_prompt = (
-        "Instrução pedagógica de áudio:\n"
-        "1. Ouça com máxima atenção o áudio do estudante e identifique com precisão a palavra, dúvida ou pergunta dita no áudio.\n"
-        "2. Responda diretamente e exclusivamente sobre o que o aluno falou:\n"
-        "   - Se ele perguntou ou pediu para aprender uma palavra ou assunto: explique o significado com um exemplo prático da vida real, ensine a falar separando as sílabas e convide-o a repetir;\n"
-        "   - Se ele tentou falar ou ler algo: valide carinhosamente e ajude na pronúncia correta com um exemplo do dia a dia.\n"
-        "3. NUNCA responda sobre palavras que o aluno não mencionou e NUNCA dê respostas genéricas."
+        "Instrução de escuta pedagógica:\n"
+        "1. Ouça com a maior atenção o áudio do aluno. Faça o melhor esforço para compreender as palavras ou pedidos ditos, mesmo com sotaque, pronúncia hesitante ou ruído ambiente típico de quem está aprendendo a ler.\n"
+        "2. Identifique a intenção ou a palavra mais provável falada:\n"
+        "   - Se o aluno pediu para aprender uma palavra ou fez uma pergunta: ensine a palavra ou o tema imediatamente, explique o que é com um exemplo simples da vida real, ensine a falar separando as sílabas e convide-o carinhosamente a repetir;\n"
+        "   - Se o aluno tentou falar ou ler uma palavra: elogie calorosamente o esforço e ajude na pronúncia correta com um exemplo do dia a dia;\n"
+        "   - Apenas se for silêncio absoluto sem qualquer voz humana, peça com gentileza para falar mais perto do microfone.\n"
+        "3. Mantenha a resposta concisa (2 a 4 frases) no tom do perfil selecionado."
     )
 
     try:
