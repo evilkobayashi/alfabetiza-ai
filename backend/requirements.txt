@@ -6,3 +6,5 @@ edge-tts
 python-dotenv
 supabase
 python-multipart
+groq
+groq
