@@ -2,12 +2,12 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/utils/supabase/client'
+import { useUser } from '@clerk/nextjs'
 import { Sparkles, Users, Accessibility, ArrowRight, BookOpen } from 'lucide-react'
 
 export default function OnboardingPage() {
   const router = useRouter()
-  const supabase = createClient()
+  const { user } = useUser()
   const [loading, setLoading] = useState(false)
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null)
   
@@ -42,65 +42,33 @@ export default function OnboardingPage() {
     if (!selectedProfile) return
     setLoading(true)
 
-    // 1. Salva imediatamente em LocalStorage e Cookie para garantir persistência instantânea
+    // 1. Persistência instantânea local e cookie
     try {
       localStorage.setItem('alfabetiza_perfil', selectedProfile)
       document.cookie = `alfabetiza_perfil=${selectedProfile}; path=/; max-age=31536000`
     } catch {}
 
+    // 2. Persiste no PostgreSQL do Railway via API
     try {
-      // 2. Obtém usuário autenticado no Supabase
-      const { data: { user } } = await supabase.auth.getUser()
-
-      if (user) {
-        // 3. Persiste no Supabase Auth User Metadata (SEMPRE funciona, nativo, sem problemas de RLS/Schema)
-        await supabase.auth.updateUser({
-          data: {
-            perfil: selectedProfile
-          }
-        })
-
-        // 4. Tenta registrar na tabela profiles pública (se existir no banco)
-        try {
-          await supabase
-            .from('profiles')
-            .upsert({
-              id: user.id,
-              full_name: user.user_metadata?.full_name || user.email?.split('@')[0],
-              role: selectedProfile
-            })
-        } catch (dbErr) {
-          console.warn('[Onboarding] Fallback ao gravar em public.profiles:', dbErr)
-        }
-
-        // 5. Tenta registrar no schema customizado caso configurado
-        try {
-          await supabase
-            .schema('alfabetiza_ai')
-            .from('profiles')
-            .upsert({
-              id: user.id,
-              perfil: selectedProfile
-            })
-        } catch (schemaErr) {
-          // Normal se o schema não estiver exposto no PostgREST
-        }
-      } else {
-        // Atualiza perfil no usuário salvo localmente
-        const localUserStr = localStorage.getItem('alfabetiza_user')
-        if (localUserStr) {
-          try {
-            const localUser = JSON.parse(localUserStr)
-            localUser.perfil = selectedProfile
-            localStorage.setItem('alfabetiza_user', JSON.stringify(localUser))
-          } catch {}
-        }
-      }
+      await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ perfil: selectedProfile }),
+      })
     } catch (e) {
-      console.warn('[Onboarding] Erro ao sincronizar perfil:', e)
+      console.warn('[Onboarding] Fallback ao gravar no banco:', e)
     }
 
-    // 6. Navega com sucesso para a Sala de Leitura
+    // 3. Atualiza metadata do usuário no Clerk se disponível
+    try {
+      if (user) {
+        await user.update({
+          unsafeMetadata: { perfil: selectedProfile }
+        })
+      }
+    } catch {}
+
+    // 4. Redireciona para a Sala de Leitura
     router.push('/sala?perfil=' + selectedProfile)
   }
 
@@ -113,32 +81,38 @@ export default function OnboardingPage() {
         </div>
         
         <h1 className="text-3xl font-black text-gray-950 mb-3">Quem vai aprender a ler?</h1>
-        <p className="text-gray-500 mb-10">Personalizamos a interface e a forma como a IA fala para adaptar à sua realidade.</p>
-        
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-10 text-left">
-          {profiles.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => setSelectedProfile(p.id)}
-              className={`p-6 rounded-2xl border-2 transition-all flex flex-col items-center text-center ${selectedProfile === p.id ? p.activeColor : p.color}`}
-            >
-              <div className="bg-white p-3 rounded-full shadow-sm mb-4">
-                {p.icon}
-              </div>
-              <h3 className="font-bold text-gray-900 mb-1">{p.title}</h3>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{p.subtitle}</p>
-            </button>
-          ))}
+        <p className="text-gray-500 mb-8 text-sm">
+          A IA vai adaptar o tom da voz, o ritmo e o visual para você.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          {profiles.map((p) => {
+            const isSelected = selectedProfile === p.id
+            return (
+              <button
+                key={p.id}
+                onClick={() => setSelectedProfile(p.id)}
+                className={`flex flex-col items-center justify-center p-6 rounded-2xl border-2 transition-all cursor-pointer text-center relative overflow-hidden ${
+                  isSelected ? p.activeColor : p.color
+                }`}
+              >
+                <div className="mb-4">{p.icon}</div>
+                <h3 className="font-bold text-gray-900 text-base mb-1">{p.title}</h3>
+                <p className="text-xs text-gray-500 font-medium">{p.subtitle}</p>
+              </button>
+            )
+          })}
         </div>
-        
-        <button 
-          onClick={handleFinish}
+
+        <button
           disabled={!selectedProfile || loading}
-          className="w-full sm:w-auto px-10 h-14 rounded-full bg-sky-600 hover:bg-sky-700 text-white font-bold text-lg shadow-md transition-all flex items-center justify-center mx-auto gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={handleFinish}
+          className="w-full py-4 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-base shadow-lg shadow-sky-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 cursor-pointer"
         >
-          {loading ? 'Preparando Sala...' : 'Continuar'} <ArrowRight className="w-5 h-5" />
+          {loading ? 'Preparando sua sala...' : 'Começar a Aprender'}
+          <ArrowRight className="w-5 h-5" />
         </button>
-        
+
       </div>
     </div>
   )
