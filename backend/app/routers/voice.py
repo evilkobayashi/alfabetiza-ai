@@ -19,7 +19,8 @@ async def chat_voice(
     try:
         # Lê os bytes do áudio original
         audio_bytes = await audio_file.read()
-        mime_type = audio_file.content_type or "audio/webm"
+        raw_mime = audio_file.content_type or "audio/webm"
+        mime_type = raw_mime.split(";")[0].strip()
         
         # Chama a inteligência artificial
         resposta_texto, audio_out_bytes = await process_audio_interaction(
