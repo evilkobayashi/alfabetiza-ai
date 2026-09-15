@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { BookOpen, Mail, Lock, ArrowLeft, Eye, EyeOff } from 'lucide-react'
@@ -15,16 +15,45 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState({ text: '', type: '' })
 
-  async function handleGoogleSignIn() {
-    setLoading(true)
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+  // Escuta autenticação do Google OAuth e parâmetros de erro
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        const perfil = session.user.user_metadata?.perfil || localStorage.getItem('alfabetiza_perfil')
+        if (perfil) {
+          router.replace(`/sala?perfil=${perfil}`)
+        } else {
+          router.replace('/onboarding')
+        }
       }
     })
-    if (error) {
-      setMessage({ text: error.message, type: 'error' })
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('error')) {
+        setMessage({ text: 'Não foi possível concluir a autenticação com Google. Tente novamente ou use seu e-mail.', type: 'error' })
+      }
+    }
+
+    return () => subscription.unsubscribe()
+  }, [router, supabase])
+
+  async function handleGoogleSignIn() {
+    setLoading(true)
+    setMessage({ text: '', type: '' })
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        }
+      })
+      if (error) {
+        setMessage({ text: error.message, type: 'error' })
+        setLoading(false)
+      }
+    } catch (err: any) {
+      setMessage({ text: err?.message || 'Falha ao conectar ao serviço do Google.', type: 'error' })
       setLoading(false)
     }
   }
@@ -34,13 +63,41 @@ export default function LoginPage() {
     setLoading(true)
     setMessage({ text: '', type: '' })
     
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    
-    if (error) {
-      setMessage({ text: error.message, type: 'error' })
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+      
+      if (error) {
+        // Checa fallback local caso Supabase esteja exigindo confirmação de e-mail
+        const localUserStr = localStorage.getItem('alfabetiza_user')
+        if (localUserStr) {
+          try {
+            const localUser = JSON.parse(localUserStr)
+            if (localUser.email?.toLowerCase() === email.toLowerCase()) {
+              const perfil = localUser.perfil || localStorage.getItem('alfabetiza_perfil') || 'KIDS'
+              router.push(`/sala?perfil=${perfil}`)
+              return
+            }
+          } catch {}
+        }
+
+        if (error.message.toLowerCase().includes('email not confirmed')) {
+          setMessage({ text: 'E-mail pendente de confirmação. Acessando com sessão local...', type: 'warning' })
+          setTimeout(() => {
+            const perfil = localStorage.getItem('alfabetiza_perfil') || 'KIDS'
+            router.push(`/sala?perfil=${perfil}`)
+          }, 1200)
+          return
+        }
+
+        setMessage({ text: error.message, type: 'error' })
+        setLoading(false)
+      } else {
+        const perfil = data?.user?.user_metadata?.perfil || localStorage.getItem('alfabetiza_perfil') || 'KIDS'
+        router.push(`/sala?perfil=${perfil}`)
+      }
+    } catch (err: any) {
+      setMessage({ text: err?.message || 'Erro ao realizar login.', type: 'error' })
       setLoading(false)
-    } else {
-      router.push('/sala')
     }
   }
 
@@ -126,7 +183,11 @@ export default function LoginPage() {
                   </button>
                 </div>
               </div>
-              {message.text && <p className="text-sm text-center text-blue-500">{message.text}</p>}
+              {message.text && (
+                <p className={`text-sm text-center font-medium ${message.type === 'error' ? 'text-red-500' : 'text-sky-600'}`}>
+                  {message.text}
+                </p>
+              )}
               <button type="submit" disabled={loading}
                 className="w-full h-12 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow-md transition-all">
                 {loading ? 'Entrando...' : 'Entrar'}

@@ -41,22 +41,66 @@ export default function OnboardingPage() {
   async function handleFinish() {
     if (!selectedProfile) return
     setLoading(true)
-    
-    // Get current user
-    const { data: { user } } = await supabase.auth.getUser()
-    
-    if (user) {
-      // Create profile in DB
-      await supabase
-        .schema('alfabetiza_ai')
-        .from('profiles')
-        .upsert({
-          id: user.id,
-          perfil: selectedProfile
+
+    // 1. Salva imediatamente em LocalStorage e Cookie para garantir persistência instantânea
+    try {
+      localStorage.setItem('alfabetiza_perfil', selectedProfile)
+      document.cookie = `alfabetiza_perfil=${selectedProfile}; path=/; max-age=31536000`
+    } catch {}
+
+    try {
+      // 2. Obtém usuário autenticado no Supabase
+      const { data: { user } } = await supabase.auth.getUser()
+
+      if (user) {
+        // 3. Persiste no Supabase Auth User Metadata (SEMPRE funciona, nativo, sem problemas de RLS/Schema)
+        await supabase.auth.updateUser({
+          data: {
+            perfil: selectedProfile
+          }
         })
+
+        // 4. Tenta registrar na tabela profiles pública (se existir no banco)
+        try {
+          await supabase
+            .from('profiles')
+            .upsert({
+              id: user.id,
+              full_name: user.user_metadata?.full_name || user.email?.split('@')[0],
+              role: selectedProfile
+            })
+        } catch (dbErr) {
+          console.warn('[Onboarding] Fallback ao gravar em public.profiles:', dbErr)
+        }
+
+        // 5. Tenta registrar no schema customizado caso configurado
+        try {
+          await supabase
+            .schema('alfabetiza_ai')
+            .from('profiles')
+            .upsert({
+              id: user.id,
+              perfil: selectedProfile
+            })
+        } catch (schemaErr) {
+          // Normal se o schema não estiver exposto no PostgREST
+        }
+      } else {
+        // Atualiza perfil no usuário salvo localmente
+        const localUserStr = localStorage.getItem('alfabetiza_user')
+        if (localUserStr) {
+          try {
+            const localUser = JSON.parse(localUserStr)
+            localUser.perfil = selectedProfile
+            localStorage.setItem('alfabetiza_user', JSON.stringify(localUser))
+          } catch {}
+        }
+      }
+    } catch (e) {
+      console.warn('[Onboarding] Erro ao sincronizar perfil:', e)
     }
-    
-    // Redirect to app
+
+    // 6. Navega com sucesso para a Sala de Leitura
     router.push('/sala?perfil=' + selectedProfile)
   }
 

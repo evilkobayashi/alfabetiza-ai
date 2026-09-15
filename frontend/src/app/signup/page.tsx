@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { BookOpen, Mail, Lock, User, ArrowLeft, Eye, EyeOff } from 'lucide-react'
@@ -16,16 +16,37 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState({ text: '', type: '' })
 
-  async function handleGoogleSignUp() {
-    setLoading(true)
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`, // Callback will handle redirect to onboarding if needed
+  // Detecta autenticação automática (Google OAuth ou sessão ativa)
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        const perfil = session.user.user_metadata?.perfil || localStorage.getItem('alfabetiza_perfil')
+        if (perfil) {
+          router.replace(`/sala?perfil=${perfil}`)
+        } else {
+          router.replace('/onboarding')
+        }
       }
     })
-    if (error) {
-      setMessage({ text: error.message, type: 'error' })
+    return () => subscription.unsubscribe()
+  }, [router, supabase])
+
+  async function handleGoogleSignUp() {
+    setLoading(true)
+    setMessage({ text: '', type: '' })
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        }
+      })
+      if (error) {
+        setMessage({ text: error.message, type: 'error' })
+        setLoading(false)
+      }
+    } catch (err: any) {
+      setMessage({ text: err?.message || 'Falha ao conectar ao serviço do Google.', type: 'error' })
       setLoading(false)
     }
   }
@@ -35,17 +56,49 @@ export default function SignupPage() {
     setLoading(true)
     setMessage({ text: '', type: '' })
     
-    const { error } = await supabase.auth.signUp({ 
-      email, 
-      password, 
-      options: { data: { full_name: name } } 
-    })
-    
-    if (error) {
-      setMessage({ text: error.message, type: 'error' })
-      setLoading(false)
-    } else {
+    try {
+      const { data, error } = await supabase.auth.signUp({ 
+        email, 
+        password, 
+        options: { data: { full_name: name, name: name } } 
+      })
+      
+      if (error) {
+        // Se a conta já existir, tenta autenticar automaticamente com a senha fornecida
+        if (error.message.toLowerCase().includes('already registered') || error.message.toLowerCase().includes('já cadastrado')) {
+          const loginAttempt = await supabase.auth.signInWithPassword({ email, password })
+          if (!loginAttempt.error) {
+            router.push('/onboarding')
+            return
+          }
+        }
+        setMessage({ text: error.message, type: 'error' })
+        setLoading(false)
+        return
+      }
+
+      // Salva dados locais para garantir resiliência e continuidade no onboarding
+      const tempUser = {
+        id: data?.user?.id || 'usr_' + Math.random().toString(36).substring(2, 9),
+        name: name.trim() || email.split('@')[0],
+        email: email.trim().toLowerCase(),
+        full_name: name.trim()
+      }
+      localStorage.setItem('alfabetiza_user', JSON.stringify(tempUser))
+
+      // Tenta login direto caso a confirmação de email esteja desativada
+      if (!data.session) {
+        const autoLogin = await supabase.auth.signInWithPassword({ email, password })
+        if (autoLogin.data?.session) {
+          router.push('/onboarding')
+          return
+        }
+      }
+
       router.push('/onboarding')
+    } catch (err: any) {
+      setMessage({ text: err?.message || 'Erro inesperado ao criar conta.', type: 'error' })
+      setLoading(false)
     }
   }
 
@@ -143,7 +196,11 @@ export default function SignupPage() {
                   </button>
                 </div>
               </div>
-              {message.text && <p className="text-sm text-center text-blue-500">{message.text}</p>}
+              {message.text && (
+                <p className={`text-sm text-center font-medium ${message.type === 'error' ? 'text-red-500' : 'text-sky-600'}`}>
+                  {message.text}
+                </p>
+              )}
               <button type="submit" disabled={loading}
                 className="w-full h-12 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow-md transition-all">
                 {loading ? 'Criando conta...' : 'Criar conta grátis'}

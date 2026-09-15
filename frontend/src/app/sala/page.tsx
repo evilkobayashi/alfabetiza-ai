@@ -13,8 +13,19 @@ function SalaContent() {
   const [profile, setProfile] = useState<Profile>(queryProfile || "KIDS");
 
   useEffect(() => {
-    if (queryProfile) {
+    if (queryProfile && ['KIDS', 'PCD', 'EJA'].includes(queryProfile)) {
       setProfile(queryProfile);
+      try {
+        localStorage.setItem('alfabetiza_perfil', queryProfile);
+        document.cookie = `alfabetiza_perfil=${queryProfile}; path=/; max-age=31536000`;
+      } catch {}
+    } else {
+      try {
+        const saved = localStorage.getItem('alfabetiza_perfil') as Profile;
+        if (saved && ['KIDS', 'PCD', 'EJA'].includes(saved)) {
+          setProfile(saved);
+        }
+      } catch {}
     }
   }, [queryProfile]);
 
@@ -84,7 +95,13 @@ function SalaContent() {
       <header className="w-full flex justify-end mb-8 overflow-x-auto pb-4">
         <div className="flex bg-white/50 backdrop-blur-md p-1 rounded-full shadow-sm border border-black/5 min-w-max">
           <button
-            onClick={() => setProfile("KIDS")}
+            onClick={() => {
+              setProfile("KIDS");
+              try {
+                localStorage.setItem('alfabetiza_perfil', 'KIDS');
+                document.cookie = 'alfabetiza_perfil=KIDS; path=/; max-age=31536000';
+              } catch {}
+            }}
             className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${
               profile === "KIDS" ? "bg-sky-500 text-white shadow-md scale-105" : "text-slate-500 hover:bg-white"
             }`}
@@ -92,7 +109,13 @@ function SalaContent() {
             Modo Criança
           </button>
           <button
-            onClick={() => setProfile("PCD")}
+            onClick={() => {
+              setProfile("PCD");
+              try {
+                localStorage.setItem('alfabetiza_perfil', 'PCD');
+                document.cookie = 'alfabetiza_perfil=PCD; path=/; max-age=31536000';
+              } catch {}
+            }}
             className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${
               profile === "PCD" ? "bg-teal-600 text-white shadow-md scale-105" : "text-slate-500 hover:bg-white"
             }`}
@@ -100,7 +123,13 @@ function SalaContent() {
             Modo Inclusão
           </button>
           <button
-            onClick={() => setProfile("EJA")}
+            onClick={() => {
+              setProfile("EJA");
+              try {
+                localStorage.setItem('alfabetiza_perfil', 'EJA');
+                document.cookie = 'alfabetiza_perfil=EJA; path=/; max-age=31536000';
+              } catch {}
+            }}
             className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${
               profile === "EJA" ? "bg-slate-800 text-white shadow-md scale-105" : "text-slate-500 hover:bg-white"
             }`}

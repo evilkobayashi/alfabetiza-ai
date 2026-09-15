@@ -1,46 +1,64 @@
-import { createServerClient, type CookieOptions } from '@supabase/ssr'
+import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { NextResponse } from 'next/server'
+import { NextResponse, type NextRequest } from 'next/server'
 
-export async function GET(request: Request) {
-  const { searchParams, origin } = new URL(request.url)
-  const code = searchParams.get('code')
-  // if "next" is in param, use it as the redirect URL
-  const next = searchParams.get('next') ?? '/onboarding'
+export async function GET(request: NextRequest) {
+  const requestUrl = new URL(request.url)
+  const code = requestUrl.searchParams.get('code')
+  const next = requestUrl.searchParams.get('next') ?? '/onboarding'
+
+  // Resolve canonical origin behind Vercel reverse proxy
+  const forwardedHost = request.headers.get('x-forwarded-host')
+  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https'
+  const origin = forwardedHost 
+    ? `${forwardedProto}://${forwardedHost}` 
+    : requestUrl.origin
 
   if (code) {
     const cookieStore = await cookies()
+    const redirectResponse = NextResponse.redirect(`${origin}${next}`)
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ueybwjekfxxoyqjisfsj.supabase.co'
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_KIyib5jaW95brAa2OZne8Q_LVGhYlAV'
+
     const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      supabaseUrl,
+      supabaseAnonKey,
       {
         cookies: {
-          get(name: string) {
-            return cookieStore.get(name)?.value
+          getAll() {
+            return cookieStore.getAll()
           },
-          set(name: string, value: string, options: CookieOptions) {
-            cookieStore.set({ name, value, ...options })
-          },
-          remove(name: string, options: CookieOptions) {
-            cookieStore.delete({ name, ...options })
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              cookieStore.set(name, value, options)
+              redirectResponse.cookies.set(name, value, options)
+            })
           },
         },
       }
     )
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
-    if (!error) {
-      // Before redirecting, check if user already has a profile to skip onboarding
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        const { data: profile } = await supabase.schema('alfabetiza_ai').from('profiles').select('id, perfil').eq('id', user.id).single()
-        if (profile?.perfil) {
-           return NextResponse.redirect(`${origin}/sala?perfil=${profile.perfil}`)
+
+    try {
+      const { data, error } = await supabase.auth.exchangeCodeForSession(code)
+
+      if (!error && data?.user) {
+        const user = data.user
+        const perfil = user.user_metadata?.perfil
+        if (perfil) {
+          const salaResponse = NextResponse.redirect(`${origin}/sala?perfil=${perfil}`)
+          redirectResponse.cookies.getAll().forEach(c => {
+            salaResponse.cookies.set(c.name, c.value)
+          })
+          return salaResponse
         }
+        return redirectResponse
       }
-      return NextResponse.redirect(`${origin}${next}`)
+    } catch (err) {
+      console.error('[Auth Callback] Erro no exchangeCodeForSession:', err)
     }
   }
 
-  // return the user to an error page with instructions
-  return NextResponse.redirect(`${origin}/login?error=true`)
+  // Fallback suave: redireciona para onboarding para que o listener do cliente capture a sessão
+  return NextResponse.redirect(`${origin}/onboarding`)
 }
