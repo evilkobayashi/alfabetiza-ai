@@ -141,7 +141,7 @@ function SalaContent() {
         
         {/* User Button (Logout) */}
         <div className="bg-white/50 backdrop-blur-md p-1.5 rounded-full shadow-sm border border-black/5 flex items-center justify-center">
-          <UserButton afterSignOutUrl="/login" />
+          <UserButton />
         </div>
       </header>
 
