@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { UserButton } from "@clerk/nextjs";
 import VoiceRecorder from "@/components/VoiceRecorder";
 import { Smile, Brain, BookOpen } from "lucide-react";
 
@@ -92,7 +93,7 @@ function SalaContent() {
     }`}>
       
       {/* HEADER DE TESTE */}
-      <header className="w-full flex justify-end mb-8 overflow-x-auto pb-4">
+      <header className="w-full flex justify-between items-center mb-8 overflow-x-auto pb-4 gap-4">
         <div className="flex bg-white/50 backdrop-blur-md p-1 rounded-full shadow-sm border border-black/5 min-w-max">
           <button
             onClick={() => {
@@ -136,6 +137,11 @@ function SalaContent() {
           >
             Modo Adulto (EJA)
           </button>
+        </div>
+        
+        {/* User Button (Logout) */}
+        <div className="bg-white/50 backdrop-blur-md p-1.5 rounded-full shadow-sm border border-black/5 flex items-center justify-center">
+          <UserButton afterSignOutUrl="/login" />
         </div>
       </header>
 

@@ -23,10 +23,10 @@ export default function LoginPage() {
 
         <div className="relative z-10 space-y-6 my-auto max-w-lg">
           <h2 className="text-4xl lg:text-5xl font-black text-white leading-tight">
-            Aprender a ler nunca foi tão natural.
+            Acesso Restrito (Fase de Testes).
           </h2>
           <p className="text-gray-300 text-base leading-relaxed">
-            Basta falar. A IA entende a sua voz e ensina letras, sílabas e palavras de forma personalizada.
+            O cadastro público está temporariamente fechado. Faça login com sua conta Google autorizada.
           </p>
         </div>
 
@@ -46,12 +46,12 @@ export default function LoginPage() {
         <div className="w-full max-w-md mx-auto my-auto flex justify-center py-6">
           <SignIn
             routing="hash"
-            signUpUrl="/signup"
             forceRedirectUrl="/onboarding"
             appearance={{
               elements: {
                 rootBox: "w-full",
                 card: "shadow-xl border border-gray-200 rounded-3xl w-full",
+                footer: "hidden", // Esconde o texto "Don't have an account? Sign up"
               }
             }}
           />
