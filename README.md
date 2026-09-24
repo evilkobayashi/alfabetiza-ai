@@ -26,3 +26,7 @@ O **Alfabetiza AÍ** quebra a principal barreira da educação digital: *exigir 
 
 ## 🔗 Ecossistema
 Faz parte da suíte **AÍ Tecnologia e Educação**, integrando-se estrategicamente para cobrir toda a jornada escolar pública e privada.
+
+
+
+teste teste teste teste
