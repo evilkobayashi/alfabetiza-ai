@@ -71,10 +71,11 @@ async def process_audio_interaction(
     try:
         transcription_obj = groq_client.audio.transcriptions.create(
             file=file_tuple,
-            model="whisper-large-v3-turbo", # Modelo atualizado para contornar bloqueio
+            model="whisper-large-v3-turbo",
             response_format="json",
             language="pt",
-            temperature=0.0
+            temperature=0.0,
+            prompt="O áudio a seguir é um aluno brasileiro fazendo uma pergunta educacional ou dizendo uma palavra isolada de forma clara."
         )
         texto_aluno = transcription_obj.text.strip()
     except Exception as stt_err:
@@ -97,11 +98,13 @@ async def process_audio_interaction(
     model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     
     user_prompt = (
-        f"O aluno acabou de falar o seguinte: \"{texto_aluno}\"\n\n"
-        "Instrução Pedagógica:\n"
-        "- Se o aluno falou apenas uma palavra aleatória ou o próprio nome, ensine a palavra (separe as sílabas) de forma lúdica.\n"
-        "- Se o aluno fez uma pergunta, responda de forma educativa.\n"
-        "- Seja super caloroso e siga estritamente as regras de tom e tamanho (2 a 4 frases)."
+        f"Transição do Microfone (O que o aluno falou): \"{texto_aluno}\"\n\n"
+        "Instrução Pedagógica OBRIGATÓRIA:\n"
+        "1. Você DEVE ler o texto acima e responder EXATAMENTE sobre o assunto, pergunta ou palavra que o aluno falou.\n"
+        "2. Se o texto for uma palavra solta, ensine a palavra (separe as sílabas).\n"
+        "3. Se o texto for uma pergunta, responda a pergunta de forma educativa.\n"
+        "4. Se o texto estiver vazio ou fizer pouco sentido, diga gentilmente que não entendeu e peça para ele repetir.\n"
+        "5. Seja super caloroso e fale no máximo 2 a 4 frases curtas."
     )
 
     try:
