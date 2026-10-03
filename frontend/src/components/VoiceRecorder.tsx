@@ -137,6 +137,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
     const formData = new FormData();
     formData.append("audio_file", audioBlob, `voice_input.${ext}`);
     formData.append("profile", profile);
+    formData.append("last_ai_response", transcription || "");
 
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://alfabetiza-ai-production.up.railway.app";

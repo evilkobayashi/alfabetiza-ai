@@ -7,7 +7,8 @@ router = APIRouter(prefix="/api/voice", tags=["Alfabetiza AÍ - Voice"])
 @router.post("/chat")
 async def chat_voice(
     audio_file: UploadFile = File(...),
-    profile: str = Form("KIDS") # KIDS, EJA, ou PCD
+    profile: str = Form("KIDS"), # KIDS, EJA, ou PCD
+    last_ai_response: str = Form("")
 ):
     """
     Recebe um áudio do frontend (ex: .webm do MediaRecorder), 
@@ -50,7 +51,7 @@ async def chat_voice(
         
         # Chama a inteligência artificial
         resposta_texto, audio_out_bytes = await process_audio_interaction(
-            audio_bytes, mime_type, profile
+            audio_bytes, mime_type, profile, last_ai_response
         )
         
         # Se falhou a geração do TTS por falta de credencial, o audio_out_bytes virá vazio

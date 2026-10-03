@@ -45,7 +45,8 @@ VOICE_PROFILES = {
 async def process_audio_interaction(
     audio_bytes: bytes, 
     mime_type: str, 
-    profile: str
+    profile: str,
+    last_ai_response: str = ""
 ) -> tuple[str, bytes]:
     """
     1. STT com Whisper (via Groq API para latência AAA).
@@ -95,6 +96,10 @@ async def process_audio_interaction(
     sys_prompt = SYSTEM_PROMPTS.get(profile, SYSTEM_PROMPTS["KIDS"])
     model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash") # 2.5 flash
     
+    contexto_str = ""
+    if last_ai_response:
+        contexto_str = f"MEMÓRIA DA CONVERSA (Sua última fala para o aluno): \"{last_ai_response}\"\n\n"
+        
     contents = []
     if usar_fallback_multimodal:
         # Fallback: Envia o áudio direto pro Gemini transcrever e responder
@@ -102,24 +107,24 @@ async def process_audio_interaction(
             genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
         )
         user_prompt = (
-            "Instrução Pedagógica OBRIGATÓRIA:\n"
+            f"{contexto_str}Instrução Pedagógica OBRIGATÓRIA:\n"
             "1. Ouça o áudio em anexo. Ele contém a voz de um aluno brasileiro.\n"
-            "2. Responda EXATAMENTE sobre o assunto, pergunta ou palavra que o aluno falou no áudio.\n"
-            "3. Se o aluno falou uma palavra solta, ensine a palavra (separe as sílabas).\n"
-            "4. Se fez uma pergunta, responda de forma educativa.\n"
-            "5. Se o áudio estiver vazio, com ruído ou fizer pouco sentido, diga gentilmente que não entendeu e peça para ele repetir.\n"
+            "2. Se o aluno estiver repetindo uma sílaba ou respondendo à sua MEMÓRIA DA CONVERSA, elogie-o calorosamente e continue a atividade.\n"
+            "3. Se o aluno fez uma nova pergunta, responda de forma educativa.\n"
+            "4. Se o aluno falou uma palavra solta nova, ensine a palavra (separe as sílabas).\n"
+            "5. Se o áudio estiver vazio, diga que não entendeu e peça para ele repetir.\n"
             "6. Seja super caloroso e fale no máximo 2 a 4 frases curtas.\n"
             "7. NÃO use formatação como asteriscos, negrito ou emojis na resposta, apenas texto puro."
         )
         contents.append(user_prompt)
     else:
         user_prompt = (
-            f"Transição do Microfone (O que o aluno falou): \"{texto_aluno}\"\n\n"
+            f"{contexto_str}Transição do Microfone (O que o aluno falou): \"{texto_aluno}\"\n\n"
             "Instrução Pedagógica OBRIGATÓRIA:\n"
-            "1. Você DEVE ler o texto acima e responder EXATAMENTE sobre o assunto, pergunta ou palavra que o aluno falou.\n"
-            "2. Se o texto for uma palavra solta, ensine a palavra (separe as sílabas).\n"
-            "3. Se o texto for uma pergunta, responda a pergunta de forma educativa.\n"
-            "4. Se o texto estiver vazio ou fizer pouco sentido, diga gentilmente que não entendeu e peça para ele repetir.\n"
+            "1. Você DEVE ler o texto acima. Se o aluno estiver repetindo uma sílaba ou respondendo à sua MEMÓRIA DA CONVERSA, elogie-o calorosamente e continue a atividade.\n"
+            "2. Se o texto for uma nova pergunta, responda a pergunta de forma educativa.\n"
+            "3. Se o texto for uma palavra solta nova, ensine a palavra (separe as sílabas).\n"
+            "4. Se o texto estiver vazio, diga que não entendeu e peça para ele repetir.\n"
             "5. Seja super caloroso e fale no máximo 2 a 4 frases curtas.\n"
             "6. NÃO use formatação como asteriscos, negrito ou emojis na resposta, apenas texto puro."
         )
