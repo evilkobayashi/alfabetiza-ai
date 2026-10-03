@@ -71,7 +71,7 @@ async def process_audio_interaction(
     try:
         transcription_obj = groq_client.audio.transcriptions.create(
             file=file_tuple,
-            model="whisper-large-v3-turbo",
+            model="whisper-large-v3",
             response_format="json",
             language="pt",
             temperature=0.0,
