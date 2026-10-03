@@ -54,39 +54,38 @@ async def process_audio_interaction(
     """
     logger.info(f"Processando áudio para o perfil: {profile}")
 
-    # ===== ETAPA 1: STT (Speech-to-Text) com Whisper =====
+    # ===== ETAPA 1: STT com Whisper (ou Fallback para Gemini) =====
     groq_key = os.getenv("GROQ_API_KEY")
+    texto_aluno = ""
+    usar_fallback_multimodal = False
+    
     if not groq_key:
-        raise ValueError("GROQ_API_KEY não configurada. Necessária para a etapa de STT (Whisper).")
-    
-    groq_client = Groq(api_key=groq_key)
-    
-    # Prepara o arquivo para a API do Whisper
-    ext = mime_type.split("/")[-1].split(";")[0] if "/" in mime_type else "webm"
-    if not ext or ext == "octet-stream": ext = "webm"
-    filename = f"audio.{ext}"
-    
-    file_tuple = (filename, audio_bytes, mime_type)
-    
-    try:
-        transcription_obj = groq_client.audio.transcriptions.create(
-            file=file_tuple,
-            model="whisper-large-v3",
-            response_format="json",
-            language="pt",
-            temperature=0.0,
-            prompt="O áudio a seguir é um aluno brasileiro fazendo uma pergunta educacional ou dizendo uma palavra isolada de forma clara."
-        )
-        texto_aluno = transcription_obj.text.strip()
-    except Exception as stt_err:
-        logger.error(f"Erro no Whisper STT: {stt_err}")
-        return "Desculpe, não consegui ouvir direito. Pode falar um pouquinho mais perto do microfone?", b""
+        usar_fallback_multimodal = True
+    else:
+        groq_client = Groq(api_key=groq_key)
+        ext = mime_type.split("/")[-1].split(";")[0] if "/" in mime_type else "webm"
+        if not ext or ext == "octet-stream": ext = "webm"
+        filename = f"audio.{ext}"
+        file_tuple = (filename, audio_bytes, mime_type)
         
-    if not texto_aluno or len(texto_aluno) < 2:
+        try:
+            transcription_obj = groq_client.audio.transcriptions.create(
+                file=file_tuple,
+                model="whisper-large-v3",
+                response_format="json",
+                language="pt",
+                temperature=0.0,
+                prompt="O áudio a seguir é um aluno brasileiro fazendo uma pergunta educacional ou dizendo uma palavra isolada de forma clara."
+            )
+            texto_aluno = transcription_obj.text.strip()
+            logger.info(f"🗣️ STT Whisper ouviu: '{texto_aluno}'")
+        except Exception as stt_err:
+            logger.error(f"Erro no Whisper STT (Bloqueio Groq), ativando Fallback Multimodal Gemini: {stt_err}")
+            usar_fallback_multimodal = True
+
+    if not usar_fallback_multimodal and (not texto_aluno or len(texto_aluno) < 2):
         return "Não ouvi nenhuma palavra, ficou muito baixinho. Clique no microfone de novo e fale com vontade!", b""
         
-    logger.info(f"🗣️ STT Whisper ouviu: '{texto_aluno}'")
-
     # ===== ETAPA 2: LLM (Cérebro Pedagógico) com Gemini =====
     gemini_key = os.getenv("GEMINI_API_KEY")
     if not gemini_key:
@@ -94,33 +93,50 @@ async def process_audio_interaction(
         
     gemini_client = genai.Client(api_key=gemini_key)
     sys_prompt = SYSTEM_PROMPTS.get(profile, SYSTEM_PROMPTS["KIDS"])
+    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash") # 1.5 flash é melhor para multimodal
     
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    
-    user_prompt = (
-        f"Transição do Microfone (O que o aluno falou): \"{texto_aluno}\"\n\n"
-        "Instrução Pedagógica OBRIGATÓRIA:\n"
-        "1. Você DEVE ler o texto acima e responder EXATAMENTE sobre o assunto, pergunta ou palavra que o aluno falou.\n"
-        "2. Se o texto for uma palavra solta, ensine a palavra (separe as sílabas).\n"
-        "3. Se o texto for uma pergunta, responda a pergunta de forma educativa.\n"
-        "4. Se o texto estiver vazio ou fizer pouco sentido, diga gentilmente que não entendeu e peça para ele repetir.\n"
-        "5. Seja super caloroso e fale no máximo 2 a 4 frases curtas."
-    )
+    contents = []
+    if usar_fallback_multimodal:
+        # Fallback: Envia o áudio direto pro Gemini transcrever e responder
+        contents.append(
+            genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+        )
+        user_prompt = (
+            "Instrução Pedagógica OBRIGATÓRIA:\n"
+            "1. Ouça o áudio em anexo. Ele contém a voz de um aluno brasileiro.\n"
+            "2. Responda EXATAMENTE sobre o assunto, pergunta ou palavra que o aluno falou no áudio.\n"
+            "3. Se o aluno falou uma palavra solta, ensine a palavra (separe as sílabas).\n"
+            "4. Se fez uma pergunta, responda de forma educativa.\n"
+            "5. Se o áudio estiver vazio, com ruído ou fizer pouco sentido, diga gentilmente que não entendeu e peça para ele repetir.\n"
+            "6. Seja super caloroso e fale no máximo 2 a 4 frases curtas."
+        )
+        contents.append(user_prompt)
+    else:
+        user_prompt = (
+            f"Transição do Microfone (O que o aluno falou): \"{texto_aluno}\"\n\n"
+            "Instrução Pedagógica OBRIGATÓRIA:\n"
+            "1. Você DEVE ler o texto acima e responder EXATAMENTE sobre o assunto, pergunta ou palavra que o aluno falou.\n"
+            "2. Se o texto for uma palavra solta, ensine a palavra (separe as sílabas).\n"
+            "3. Se o texto for uma pergunta, responda a pergunta de forma educativa.\n"
+            "4. Se o texto estiver vazio ou fizer pouco sentido, diga gentilmente que não entendeu e peça para ele repetir.\n"
+            "5. Seja super caloroso e fale no máximo 2 a 4 frases curtas."
+        )
+        contents.append(user_prompt)
 
     try:
         response = gemini_client.models.generate_content(
             model=model_name,
-            contents=user_prompt,
+            contents=contents,
             config=genai.types.GenerateContentConfig(
                 system_instruction=sys_prompt,
                 temperature=0.3,
             )
         )
     except Exception as model_err:
-        logger.warning(f"Falha com modelo {model_name}, tentando gemini-1.5-flash: {model_err}")
+        logger.warning(f"Falha com modelo {model_name}, tentando gemini-1.5-flash fallback: {model_err}")
         response = gemini_client.models.generate_content(
             model='gemini-1.5-flash',
-            contents=user_prompt,
+            contents=contents,
             config=genai.types.GenerateContentConfig(
                 system_instruction=sys_prompt,
                 temperature=0.3,
