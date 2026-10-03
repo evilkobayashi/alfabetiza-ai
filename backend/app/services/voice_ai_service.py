@@ -47,7 +47,7 @@ async def process_audio_interaction(
     mime_type: str, 
     profile: str,
     last_ai_response: str = ""
-) -> tuple[str, bytes]:
+) -> tuple[str, bytes, str]:
     """
     1. STT com Whisper (via Groq API para latência AAA).
     2. LLM com Gemini para raciocínio pedagógico em cima da transcrição.
@@ -85,7 +85,7 @@ async def process_audio_interaction(
             usar_fallback_multimodal = True
 
     if not usar_fallback_multimodal and (not texto_aluno or len(texto_aluno) < 2):
-        return "Não ouvi nenhuma palavra, ficou muito baixinho. Clique no microfone de novo e fale com vontade!", b""
+        return "Não ouvi nenhuma palavra, ficou muito baixinho. Clique no microfone de novo e fale com vontade!", b"", ""
         
     # ===== ETAPA 2: LLM (Cérebro Pedagógico) com Gemini =====
     gemini_key = os.getenv("GEMINI_API_KEY")
@@ -168,4 +168,5 @@ async def process_audio_interaction(
             
     audio_out_bytes = b"".join(audio_chunks)
     
-    return resposta_texto, audio_out_bytes
+    texto_detectado = texto_aluno if texto_aluno else "[Áudio Multimodal]"
+    return resposta_texto, audio_out_bytes, texto_detectado

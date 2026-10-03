@@ -14,6 +14,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
   const [isProcessing, setIsProcessing] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [transcription, setTranscription] = useState("");
+  const [contextHistory, setContextHistory] = useState("");
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -137,7 +138,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
     const formData = new FormData();
     formData.append("audio_file", audioBlob, `voice_input.${ext}`);
     formData.append("profile", profile);
-    formData.append("last_ai_response", transcription || "");
+    formData.append("last_ai_response", contextHistory);
 
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://alfabetiza-ai-production.up.railway.app";
@@ -150,6 +151,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
       }
       const data = await response.json();
       setTranscription(data.transcription_or_reasoning);
+      setContextHistory(prev => `${prev}\nAluno: ${data.student_transcription || "..."}\nProfessor: ${data.transcription_or_reasoning}`);
 
       if (data.audio_base64) {
         const audioSrc = `data:${data.mime_type};base64,${data.audio_base64}`;

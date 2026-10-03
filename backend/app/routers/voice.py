@@ -50,7 +50,7 @@ async def chat_voice(
             }
         
         # Chama a inteligência artificial
-        resposta_texto, audio_out_bytes = await process_audio_interaction(
+        resposta_texto, audio_out_bytes, texto_aluno = await process_audio_interaction(
             audio_bytes, mime_type, profile, last_ai_response
         )
         
@@ -62,6 +62,7 @@ async def chat_voice(
         return {
             "profile": profile,
             "transcription_or_reasoning": resposta_texto,
+            "student_transcription": texto_aluno,
             "audio_base64": audio_b64,
             "mime_type": "audio/mp3"
         }
