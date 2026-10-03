@@ -108,7 +108,8 @@ async def process_audio_interaction(
             "3. Se o aluno falou uma palavra solta, ensine a palavra (separe as sílabas).\n"
             "4. Se fez uma pergunta, responda de forma educativa.\n"
             "5. Se o áudio estiver vazio, com ruído ou fizer pouco sentido, diga gentilmente que não entendeu e peça para ele repetir.\n"
-            "6. Seja super caloroso e fale no máximo 2 a 4 frases curtas."
+            "6. Seja super caloroso e fale no máximo 2 a 4 frases curtas.\n"
+            "7. NÃO use formatação como asteriscos, negrito ou emojis na resposta, apenas texto puro."
         )
         contents.append(user_prompt)
     else:
@@ -119,7 +120,8 @@ async def process_audio_interaction(
             "2. Se o texto for uma palavra solta, ensine a palavra (separe as sílabas).\n"
             "3. Se o texto for uma pergunta, responda a pergunta de forma educativa.\n"
             "4. Se o texto estiver vazio ou fizer pouco sentido, diga gentilmente que não entendeu e peça para ele repetir.\n"
-            "5. Seja super caloroso e fale no máximo 2 a 4 frases curtas."
+            "5. Seja super caloroso e fale no máximo 2 a 4 frases curtas.\n"
+            "6. NÃO use formatação como asteriscos, negrito ou emojis na resposta, apenas texto puro."
         )
         contents.append(user_prompt)
 
@@ -149,7 +151,10 @@ async def process_audio_interaction(
     # ===== ETAPA 3: TTS (Text-to-Speech) com Edge Neural =====
     voice_name = VOICE_PROFILES.get(profile, "pt-BR-FranciscaNeural")
     
-    communicate = edge_tts.Communicate(resposta_texto, voice_name)
+    # Remove marcações markdown (*, _, #) para não serem lidas em voz alta
+    texto_para_voz = resposta_texto.replace("*", "").replace("#", "").replace("_", "")
+    
+    communicate = edge_tts.Communicate(texto_para_voz, voice_name)
     audio_chunks = []
     
     async for chunk in communicate.stream():
