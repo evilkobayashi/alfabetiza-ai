@@ -93,7 +93,7 @@ async def process_audio_interaction(
         
     gemini_client = genai.Client(api_key=gemini_key)
     sys_prompt = SYSTEM_PROMPTS.get(profile, SYSTEM_PROMPTS["KIDS"])
-    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash") # 1.5 flash é melhor para multimodal
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash") # 2.5 flash
     
     contents = []
     if usar_fallback_multimodal:
@@ -133,9 +133,9 @@ async def process_audio_interaction(
             )
         )
     except Exception as model_err:
-        logger.warning(f"Falha com modelo {model_name}, tentando gemini-1.5-flash fallback: {model_err}")
+        logger.warning(f"Falha com modelo {model_name}, tentando gemini-2.5-flash fallback: {model_err}")
         response = gemini_client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.5-flash',
             contents=contents,
             config=genai.types.GenerateContentConfig(
                 system_instruction=sys_prompt,
