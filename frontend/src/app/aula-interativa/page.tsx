@@ -98,7 +98,7 @@ export default function AulaInterativa() {
             <div className="w-32 h-3 bg-slate-100 rounded-full overflow-hidden">
               <div 
                 className="h-full bg-sky-500 rounded-full transition-all duration-500"
-                style={{ width: \`\${((currentPage) / LESSON_DATA.pages.length) * 100}%\` }}
+                style={{ width: `${((currentPage) / LESSON_DATA.pages.length) * 100}%` }}
               />
             </div>
             <span className="text-sm font-bold text-slate-400">{currentPage + 1}/{LESSON_DATA.pages.length}</span>
@@ -156,13 +156,13 @@ export default function AulaInterativa() {
                   {pageData.text.split(' ').map((word, i) => (
                     <span 
                       key={i} 
-                      className={\`inline-block mx-2 \${
+                      className={`inline-block mx-2 ${
                         word === pageData.targetWord 
                           ? feedback === "success" 
                             ? "text-green-500" 
                             : "text-sky-500 underline decoration-sky-300 decoration-4 underline-offset-8"
                           : ""
-                      }\`}
+                      }`}
                     >
                       {word}
                     </span>
@@ -266,11 +266,11 @@ export default function AulaInterativa() {
             ) : (
               <button
                 onClick={simulateRecording}
-                className={\`w-full font-black text-xl py-6 rounded-3xl transition-all flex flex-col items-center justify-center gap-2 relative overflow-hidden \${
+                className={`w-full font-black text-xl py-6 rounded-3xl transition-all flex flex-col items-center justify-center gap-2 relative overflow-hidden ${
                   isRecording 
                     ? 'bg-rose-500 text-white shadow-none translate-y-2' 
                     : 'bg-sky-500 hover:bg-sky-400 text-white shadow-[0_8px_0_rgb(2,132,199)] active:translate-y-2 active:shadow-none'
-                }\`}
+                }`}
               >
                 {isRecording ? (
                   <>
