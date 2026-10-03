@@ -15,13 +15,16 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [transcription, setTranscription] = useState("");
   const [contextHistory, setContextHistory] = useState("");
+  const [isConversationMode, setIsConversationMode] = useState(false);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mimeTypeRef = useRef<string>("audio/webm");
-
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const silenceStartRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
   // Limpeza ao desmontar componente
   useEffect(() => {
     return () => {
@@ -94,6 +97,46 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
 
+      // --- VAD: Voice Activity Detection (Auto-stop) ---
+      // Usamos apenas window, pois setIsConversationMode() não é acessível de dentro do closure com valor atualizado
+      // Portanto, o VAD roda sempre, mas só clica "stop" automaticamente se estiver no isConversationMode.
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioCtx;
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+      
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      
+      const checkAudioLevel = () => {
+        if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") return;
+        
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+        const average = sum / dataArray.length;
+
+        if (average > 15) { // Som detectado (usuário falando)
+          silenceStartRef.current = null;
+        } else {
+          // Silêncio
+          if (!silenceStartRef.current) silenceStartRef.current = Date.now();
+          // Se ficou > 2.5s em silêncio e tem algo gravado E estamos no modo mãos livres
+          if (Date.now() - silenceStartRef.current > 2500) {
+            // Em vez de ler estado, usamos a ref pra saber se mãos livres tá ligado
+            if ((window as any).__isHandsFree) {
+               stopRecording();
+               return; // Encapsula raf
+            }
+          }
+        }
+        rafRef.current = requestAnimationFrame(checkAudioLevel);
+      };
+      
+      checkAudioLevel();
+      // ------------------------------------------------
+
     } catch (error) {
       console.error("Erro ao acessar microfone:", error);
       setIsStarting(false);
@@ -107,6 +150,15 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
+    }
+    
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(()=>{});
+      audioContextRef.current = null;
     }
 
     setIsRecording(false);
@@ -156,7 +208,17 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
       if (data.audio_base64) {
         const audioSrc = `data:${data.mime_type};base64,${data.audio_base64}`;
         const audioPlayer = new Audio(audioSrc);
-        audioPlayer.play().catch((err) => console.warn("Autoplay impedido pelo navegador:", err));
+        audioPlayer.onended = () => {
+           if ((window as any).__isHandsFree) {
+              startRecording();
+           }
+        };
+        audioPlayer.play().catch((err) => console.warn("Autoplay impedido:", err));
+      } else {
+        // Se a IA não retornou áudio (ex: erro silencioso)
+        if ((window as any).__isHandsFree) {
+           setTimeout(() => startRecording(), 1000);
+        }
       }
     } catch (error) {
       setTranscription("Ops! Tivemos um problema de conexão. Tente novamente.");
@@ -200,6 +262,10 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
         disabled={isProcessing || isStarting}
         onClick={() => {
           if (isRecording) {
+            if (isConversationMode) {
+              setIsConversationMode(false);
+              (window as any).__isHandsFree = false;
+            }
             stopRecording();
           } else if (!isProcessing && !isStarting) {
             startRecording();
@@ -233,11 +299,26 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
           {isStarting 
             ? "Ligando microfone..."
             : isRecording 
-            ? "Pode falar agora! Clique no botão quando terminar."
+            ? "Pode falar agora! O microfone enviará automaticamente quando houver silêncio."
             : isProcessing 
             ? "A IA está ouvindo sua voz..."
             : "Clique no microfone para falar"}
         </p>
+
+        {/* Toggle HandsFree */}
+        <button 
+          onClick={() => {
+             const newVal = !isConversationMode;
+             setIsConversationMode(newVal);
+             (window as any).__isHandsFree = newVal;
+             if (newVal && !isRecording && !isStarting && !isProcessing) {
+                startRecording();
+             }
+          }}
+          className={`px-4 py-2 mt-4 rounded-full font-bold text-sm transition-all border-2 ${isConversationMode ? 'bg-sky-100 border-sky-400 text-sky-700 shadow-inner' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+        >
+           {isConversationMode ? '🎙️ Modo Mãos Livres: ATIVADO' : 'Ativar Modo Mãos Livres (Automático)'}
+        </button>
 
         {isRecording && (
           <p className="text-xs font-bold text-red-500 uppercase tracking-widest animate-pulse">
