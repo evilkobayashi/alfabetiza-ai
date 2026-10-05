@@ -150,6 +150,14 @@ function SalaContent() {
       {profile === "PCD" && <PCDTheme />}
       {profile === "EJA" && <EJATheme />}
 
+      {/* FOOTER - AVISO LGPD / Supervisão Humana */}
+      <footer className="w-full mt-auto pt-8 pb-4 text-center">
+        <p className="text-xs text-slate-500 max-w-lg mx-auto">
+          ⚠️ <strong>Supervisão Humana:</strong> A IA atua como um assistente educacional. Qualquer análise ou diagnóstico gerado são apenas <em>sugestões</em> e exigem obrigatoriamente a validação de um educador responsável.
+        </p>
+      </footer>
+
+
     </main>
   );
 }

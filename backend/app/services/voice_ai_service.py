@@ -87,6 +87,12 @@ async def process_audio_interaction(
     if not usar_fallback_multimodal and (not texto_aluno or len(texto_aluno) < 2):
         return "Não ouvi nenhuma palavra, ficou muito baixinho. Clique no microfone de novo e fale com vontade!", b"", ""
         
+    # Anonimização LGPD/ECA (remove números longos e emails do texto do aluno antes de ir para IA)
+    import re
+    if texto_aluno:
+        texto_aluno = re.sub(r'\b\d{4,}\b', '[DADO_PROTEGIDO]', texto_aluno)
+        texto_aluno = re.sub(r'\S+@\S+', '[DADO_PROTEGIDO]', texto_aluno)
+
     # ===== ETAPA 2: LLM (Cérebro Pedagógico) com Gemini =====
     gemini_key = os.getenv("GEMINI_API_KEY")
     if not gemini_key:

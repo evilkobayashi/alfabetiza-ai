@@ -10,6 +10,8 @@ export default function OnboardingPage() {
   const { user } = useUser()
   const [loading, setLoading] = useState(false)
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null)
+  const [lgpdAccepted, setLgpdAccepted] = useState(false)
+  const [ageAccepted, setAgeAccepted] = useState(false)
   
   const profiles = [
     {
@@ -104,8 +106,19 @@ export default function OnboardingPage() {
           })}
         </div>
 
+        <div className="flex flex-col gap-3 text-left bg-gray-100 p-4 rounded-xl mb-6">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" className="w-5 h-5 accent-sky-600 mt-0.5" checked={ageAccepted} onChange={(e) => setAgeAccepted(e.target.checked)} />
+            <span className="text-sm text-gray-700 font-medium">Confirmo que sou maior de 18 anos ou o responsável legal.</span>
+          </label>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" className="w-5 h-5 accent-sky-600 mt-0.5" checked={lgpdAccepted} onChange={(e) => setLgpdAccepted(e.target.checked)} />
+            <span className="text-sm text-gray-700 font-medium">Li e aceito os termos da LGPD (Lei Geral de Proteção de Dados) para o processamento educacional.</span>
+          </label>
+        </div>
+
         <button
-          disabled={!selectedProfile || loading}
+          disabled={!selectedProfile || loading || !ageAccepted || !lgpdAccepted}
           onClick={handleFinish}
           className="w-full py-4 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-base shadow-lg shadow-sky-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 cursor-pointer"
         >
