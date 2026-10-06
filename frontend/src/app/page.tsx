@@ -131,6 +131,16 @@ export default function LandingPage() {
           <p className="text-slate-500 text-sm font-medium">© {new Date().getFullYear()} AÍ Tecnologia e Educação. Todos os direitos reservados.</p>
         </div>
       </footer>
+
+{/* Disclaimer CDC */}
+<div className="w-full bg-gray-900 text-gray-400 py-6 text-center text-xs px-4">
+  <p className="max-w-4xl mx-auto">
+    Aviso Legal: Esta plataforma é uma ferramenta de <strong>assistência pedagógica baseada em Inteligência Artificial</strong>. 
+    Não garantimos resultados acadêmicos absolutos, notas ou aprovação automática. O uso das ferramentas requer supervisão 
+    do educador ou responsável legal.
+  </p>
+</div>
+
     </div>
   )
 }
