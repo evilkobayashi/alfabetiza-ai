@@ -122,11 +122,17 @@ export default function LandingPage() {
       {/* FOOTER */}
       <footer className="bg-[#FAF9F6] py-12">
         <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center text-white">
-              <BookOpen className="w-4 h-4" />
+          <div className="flex flex-col md:flex-row items-center gap-6">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center text-white">
+                <BookOpen className="w-4 h-4" />
+              </div>
+              <span className="font-serif font-bold text-blue-950 text-xl">Alfabetiza<span className="text-amber-600">AÍ</span></span>
             </div>
-            <span className="font-serif font-bold text-blue-950 text-xl">Alfabetiza<span className="text-amber-600">AÍ</span></span>
+            <div className="flex items-center gap-4 text-sm font-medium text-slate-500">
+              <Link href="/termos" className="hover:text-blue-900 transition-colors">Termos de Uso</Link>
+              <Link href="/privacidade" className="hover:text-blue-900 transition-colors">Privacidade</Link>
+            </div>
           </div>
           <p className="text-slate-500 text-sm font-medium">© {new Date().getFullYear()} AÍ Tecnologia e Educação. Todos os direitos reservados.</p>
         </div>
