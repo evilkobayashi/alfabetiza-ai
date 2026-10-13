@@ -1,8 +1,9 @@
 import base64
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from app.auth import get_user_id
 from app.services.voice_ai_service import process_audio_interaction
 
-router = APIRouter(prefix="/api/voice", tags=["Alfabetiza AÍ - Voice"])
+router = APIRouter(prefix="/api/voice", tags=["Alfabetiza AÍ - Voice"], dependencies=[Depends(get_user_id)])
 
 @router.post("/chat")
 async def chat_voice(

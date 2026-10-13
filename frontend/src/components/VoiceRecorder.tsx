@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useAuth } from "@clerk/nextjs";
 import { Mic, Square, Loader2, Volume2 } from "lucide-react";
 
 interface VoiceRecorderProps {
@@ -9,6 +10,7 @@ interface VoiceRecorderProps {
 }
 
 export default function VoiceRecorder({ profile, animationsEnabled = true }: VoiceRecorderProps) {
+  const { getToken } = useAuth();
   const [isStarting, setIsStarting] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -194,11 +196,16 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
 
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://alfabetiza-ai-production.up.railway.app";
-      const response = await fetch(`${API_URL}/api/voice/chat`, { method: "POST", body: formData });
+      const token = await getToken();
+      const response = await fetch(`${API_URL}/api/voice/chat`, { method: "POST", body: formData, headers: { Authorization: `Bearer ${token}` } });
 
       if (!response.ok) {
         const errText = await response.text();
         console.error("Erro na API de Voz:", response.status, errText);
+        if (response.status === 429) {
+          setTranscription("Você já conversou bastante hoje! Volte amanhã para continuar aprendendo.");
+          return;
+        }
         throw new Error("Falha na API de Voz");
       }
       const data = await response.json();
