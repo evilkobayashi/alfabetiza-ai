@@ -17,10 +17,14 @@ async def chat_voice(
     """
     if profile not in ["KIDS", "EJA", "PCD"]:
         raise HTTPException(status_code=400, detail="Perfil inválido.")
+
+    last_ai_response = (last_ai_response or "")[:1000]
         
     try:
         # Lê os bytes do áudio original
         audio_bytes = await audio_file.read()
+        if len(audio_bytes) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Arquivo de áudio excede o limite de 10 MB.")
         raw_mime = (audio_file.content_type or "audio/webm").split(";")[0].strip()
         
         # Detecção de mime type real por magic bytes
@@ -68,5 +72,9 @@ async def chat_voice(
             "mime_type": "audio/mp3"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import logging
+        logging.getLogger(__name__).error(f"Erro ao processar áudio: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Erro interno ao processar o áudio.")

@@ -10,8 +10,8 @@ export async function POST(req: Request) {
     }
 
     const { perfil } = await req.json()
-    if (!perfil) {
-      return NextResponse.json({ error: 'Perfil is required' }, { status: 400 })
+    if (!perfil || !['KIDS', 'EJA', 'PCD'].includes(perfil)) {
+      return NextResponse.json({ error: 'Perfil inválido' }, { status: 400 })
     }
 
     const user = await currentUser()
@@ -26,6 +26,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true, profile: saved[0] })
   } catch (error: any) {
     console.error('Error in /api/profile:', error)
-    return NextResponse.json({ error: error?.message || 'Server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

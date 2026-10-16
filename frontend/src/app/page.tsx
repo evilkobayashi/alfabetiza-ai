@@ -68,9 +68,16 @@ export default function LandingPage() {
                   Acessar Plataforma <ArrowRight className="w-5 h-5" />
                 </button>
               </Link>
-              <button className="w-full sm:w-auto h-14 px-8 text-base rounded-full bg-white border-2 border-slate-200 text-blue-950 hover:border-slate-300 font-semibold flex items-center justify-center gap-2 transition-colors">
+              <a
+                href="#como-funciona"
+                onClick={(e) => {
+                  e.preventDefault()
+                  document.getElementById('como-funciona')?.scrollIntoView({ behavior: 'smooth' })
+                }}
+                className="w-full sm:w-auto h-14 px-8 text-base rounded-full bg-white border-2 border-slate-200 text-blue-950 hover:border-slate-300 font-semibold flex items-center justify-center gap-2 transition-colors"
+              >
                 <PlayCircle className="w-5 h-5 text-amber-600" /> Ver como funciona
-              </button>
+              </a>
             </motion.div>
 
             <motion.div initial="hidden" animate="visible" custom={4} variants={fadeIn}
@@ -110,7 +117,7 @@ export default function LandingPage() {
       </section>
 
       {/* METODOLOGIA */}
-      <section className="py-24 bg-white border-y border-slate-200">
+      <section id="como-funciona" className="py-24 bg-white border-y border-slate-200">
         <div className="max-w-6xl mx-auto px-6 text-center max-w-3xl">
           <h2 className="text-3xl lg:text-4xl font-serif font-bold text-blue-950 mb-6">Feito por pessoas, para pessoas.</h2>
           <p className="text-lg text-slate-600 leading-relaxed">

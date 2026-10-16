@@ -1,11 +1,9 @@
 import postgres from 'postgres'
 
-const connectionString =
-  process.env.DATABASE_URL ||
-  'postgresql://postgres:iHEZhZTPDrkPLQkZLWejhjoQpBdTFOuu@turntable.proxy.rlwy.net:49435/railway'
+const connectionString = process.env.DATABASE_URL!
 
 export const sql = postgres(connectionString, {
-  ssl: false,
+  ssl: process.env.NODE_ENV === 'production' ? 'require' : false,
   max: 10,
 })
 

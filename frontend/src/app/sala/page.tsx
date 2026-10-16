@@ -92,9 +92,10 @@ function SalaContent() {
                            "bg-slate-50 font-serif" // EJA Theme (Elegante e clássico)
     }`}>
       
-      {/* HEADER DE TESTE */}
+      {/* MODO DE APRENDIZADO */}
       <header className="w-full flex justify-between items-center mb-8 overflow-x-auto pb-4 gap-4">
-        <div className="flex bg-white/50 backdrop-blur-md p-1 rounded-full shadow-sm border border-black/5 min-w-max">
+        <div className="flex items-center gap-2 bg-white/50 backdrop-blur-md p-1 pl-4 rounded-full shadow-sm border border-black/5 min-w-max">
+          <span className="text-xs font-semibold text-slate-600 mr-1">Modo de Aprendizado:</span>
           <button
             onClick={() => {
               setProfile("KIDS");

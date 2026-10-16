@@ -27,6 +27,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
   const audioContextRef = useRef<AudioContext | null>(null);
   const silenceStartRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
+  const isHandsFreeRef = useRef<boolean>(false);
   // Limpeza ao desmontar componente
   useEffect(() => {
     return () => {
@@ -100,8 +101,6 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
       }, 1000);
 
       // --- VAD: Voice Activity Detection (Auto-stop) ---
-      // Usamos apenas window, pois setIsConversationMode() não é acessível de dentro do closure com valor atualizado
-      // Portanto, o VAD roda sempre, mas só clica "stop" automaticamente se estiver no isConversationMode.
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       audioContextRef.current = audioCtx;
       const analyser = audioCtx.createAnalyser();
@@ -126,8 +125,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
           if (!silenceStartRef.current) silenceStartRef.current = Date.now();
           // Se ficou > 2.5s em silêncio e tem algo gravado E estamos no modo mãos livres
           if (Date.now() - silenceStartRef.current > 2500) {
-            // Em vez de ler estado, usamos a ref pra saber se mãos livres tá ligado
-            if ((window as any).__isHandsFree) {
+            if (isHandsFreeRef.current) {
                stopRecording();
                return; // Encapsula raf
             }
@@ -216,14 +214,14 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
         const audioSrc = `data:${data.mime_type};base64,${data.audio_base64}`;
         const audioPlayer = new Audio(audioSrc);
         audioPlayer.onended = () => {
-           if ((window as any).__isHandsFree) {
+           if (isHandsFreeRef.current) {
               startRecording();
            }
         };
         audioPlayer.play().catch((err) => console.warn("Autoplay impedido:", err));
       } else {
         // Se a IA não retornou áudio (ex: erro silencioso)
-        if ((window as any).__isHandsFree) {
+        if (isHandsFreeRef.current) {
            setTimeout(() => startRecording(), 1000);
         }
       }
@@ -271,7 +269,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
           if (isRecording) {
             if (isConversationMode) {
               setIsConversationMode(false);
-              (window as any).__isHandsFree = false;
+              isHandsFreeRef.current = false;
             }
             stopRecording();
           } else if (!isProcessing && !isStarting) {
@@ -306,7 +304,9 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
           {isStarting 
             ? "Ligando microfone..."
             : isRecording 
-            ? "Pode falar agora! O microfone enviará automaticamente quando houver silêncio."
+            ? isConversationMode
+              ? "Pode falar agora! O microfone enviará automaticamente quando houver silêncio."
+              : "Pode falar agora! Clique no botão quadrado para enviar."
             : isProcessing 
             ? "A IA está ouvindo sua voz..."
             : "Clique no microfone para falar"}
@@ -317,7 +317,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
           onClick={() => {
              const newVal = !isConversationMode;
              setIsConversationMode(newVal);
-             (window as any).__isHandsFree = newVal;
+             isHandsFreeRef.current = newVal;
              if (newVal && !isRecording && !isStarting && !isProcessing) {
                 startRecording();
              }
