@@ -165,14 +165,18 @@ async def process_audio_interaction(
     # Remove marcações markdown (*, _, #) para não serem lidas em voz alta
     texto_para_voz = resposta_texto.replace("*", "").replace("#", "").replace("_", "")
     
-    communicate = edge_tts.Communicate(texto_para_voz, voice_name)
-    audio_chunks = []
-    
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_chunks.append(chunk["data"])
-            
-    audio_out_bytes = b"".join(audio_chunks)
+    try:
+        communicate = edge_tts.Communicate(texto_para_voz, voice_name)
+        audio_chunks = []
+        
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_chunks.append(chunk["data"])
+                
+        audio_out_bytes = b"".join(audio_chunks)
+    except Exception as tts_err:
+        logger.warning(f"Falha ao gerar áudio TTS com Edge Neural, enviando resposta apenas em texto: {tts_err}")
+        audio_out_bytes = b""
     
     texto_detectado = texto_aluno if texto_aluno else "[Áudio Multimodal]"
     return resposta_texto, audio_out_bytes, texto_detectado

@@ -18,7 +18,7 @@ async def chat_voice(
     if profile not in ["KIDS", "EJA", "PCD"]:
         raise HTTPException(status_code=400, detail="Perfil inválido.")
 
-    last_ai_response = (last_ai_response or "")[:1000]
+    last_ai_response = (last_ai_response or "")[-1000:]
         
     try:
         # Lê os bytes do áudio original

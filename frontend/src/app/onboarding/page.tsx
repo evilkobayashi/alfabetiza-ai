@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useUser } from '@clerk/nextjs'
 import { Sparkles, Users, Accessibility, ArrowRight, BookOpen } from 'lucide-react'
@@ -12,6 +12,15 @@ export default function OnboardingPage() {
   const [selectedProfile, setSelectedProfile] = useState<string | null>(null)
   const [lgpdAccepted, setLgpdAccepted] = useState(false)
   const [ageAccepted, setAgeAccepted] = useState(false)
+
+  useEffect(() => {
+    try {
+      const savedPerfil = localStorage.getItem('alfabetiza_perfil') || (user?.unsafeMetadata?.perfil as string | undefined)
+      if (savedPerfil && ['KIDS', 'EJA', 'PCD'].includes(savedPerfil)) {
+        router.replace(`/sala?perfil=${savedPerfil}`)
+      }
+    } catch {}
+  }, [user, router])
   
   const profiles = [
     {
