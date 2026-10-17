@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { UserButton } from "@clerk/nextjs";
 import VoiceRecorder from "@/components/VoiceRecorder";
 import { Smile, Brain, BookOpen } from "lucide-react";
@@ -140,9 +141,17 @@ function SalaContent() {
           </button>
         </div>
         
-        {/* User Button (Logout) */}
-        <div className="bg-white/50 backdrop-blur-md p-1.5 rounded-full shadow-sm border border-black/5 flex items-center justify-center">
-          <UserButton />
+        {/* User Button & Plano Família */}
+        <div className="flex items-center gap-2">
+          <Link
+            href="/pagamento"
+            className="bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-colors whitespace-nowrap"
+          >
+            Voz Ilimitada 👑
+          </Link>
+          <div className="bg-white/50 backdrop-blur-md p-1.5 rounded-full shadow-sm border border-black/5 flex items-center justify-center">
+            <UserButton />
+          </div>
         </div>
       </header>
 

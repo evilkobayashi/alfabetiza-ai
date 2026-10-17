@@ -30,11 +30,21 @@ async def get_user_id(authorization: str = Header(default="")) -> str:
         raise HTTPException(status_code=401, detail="Sessão inválida ou expirada.")
 
     user_id = claims["sub"]
+    
+    # Usuários PRO (Plano Família) têm voz ilimitada
+    meta = claims.get("public_metadata") or claims.get("metadata") or {}
+    is_pro = bool(meta.get("isPro") or claims.get("isPro"))
+    if is_pro:
+        return user_id
+
     day = time.strftime("%Y-%m-%d", time.gmtime())
     for k in [k for k in _usage if k[1] != day]:
         del _usage[k]
-    limit = int(os.getenv("DAILY_VOICE_LIMIT", "40"))
+    limit = int(os.getenv("DAILY_VOICE_LIMIT", "10"))
     if _usage[(user_id, day)] >= limit:
-        raise HTTPException(status_code=429, detail="Limite diário de conversas atingido. Volte amanhã!")
+        raise HTTPException(
+            status_code=429, 
+            detail="Limite diário de 10 conversas gratuitas atingido. Assine o Plano Família para conversas ilimitadas!"
+        )
     _usage[(user_id, day)] += 1
     return user_id

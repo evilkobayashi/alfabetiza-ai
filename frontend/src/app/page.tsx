@@ -126,6 +126,61 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* PLANOS E PREÇOS */}
+      <section className="py-20 bg-[#FAF9F6] border-b border-slate-200">
+        <div className="max-w-5xl mx-auto px-6">
+          <div className="text-center max-w-2xl mx-auto mb-12">
+            <h2 className="text-3xl lg:text-4xl font-serif font-bold text-blue-950 mb-3">Planos simples para toda a família</h2>
+            <p className="text-slate-600 text-sm">Comece gratuitamente ou tenha voz ilimitada com acompanhamento de progresso.</p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
+            {/* Grátis */}
+            <div className="bg-white border-2 border-slate-200 rounded-3xl p-8 flex flex-col justify-between">
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Degustação</span>
+                <h3 className="text-2xl font-bold text-blue-950 mt-1">Plano Gratuito</h3>
+                <p className="text-3xl font-bold text-slate-900 mt-2">R$ 0</p>
+                <p className="text-xs text-slate-500 mt-0.5">10 conversas de voz por dia</p>
+                <ul className="mt-6 space-y-3">
+                  {['10 conversas de voz diárias', 'Acesso aos 3 modos (KIDS, EJA e PCD)', 'Modo Mãos-Livres (VAD)', 'Sem necessidade de cartão'].map(f => (
+                    <li key={f} className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                      <span className="text-emerald-600 font-bold">✓</span> {f}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <Link href="/onboarding" className="mt-8 block w-full text-center bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold py-3 rounded-xl text-sm transition-colors">
+                Começar Grátis
+              </Link>
+            </div>
+
+            {/* Plano Família */}
+            <div className="bg-white border-2 border-amber-500 rounded-3xl p-8 flex flex-col justify-between relative shadow-lg shadow-amber-500/10">
+              <span className="absolute -top-3 right-6 bg-amber-600 text-white text-[10px] font-extrabold uppercase px-3 py-1 rounded-full shadow-sm">
+                Recomendado
+              </span>
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-amber-700">Acesso Completo</span>
+                <h3 className="text-2xl font-bold text-blue-950 mt-1">Plano Família</h3>
+                <p className="text-3xl font-bold text-slate-900 mt-2">R$ 24,90 <span className="text-xs text-slate-500 font-normal">/mês</span></p>
+                <p className="text-xs text-emerald-600 font-bold mt-0.5">ou R$ 147,00 no plano anual (-50%)</p>
+                <ul className="mt-6 space-y-3">
+                  {['Conversas de voz 100% ILIMITADAS', 'Mascote interativo e atividades fonéticas', 'Relatório fonético (sílabas e letras aprendidas)', 'Suporte prioritário e inclusão PCD dedicada'].map(f => (
+                    <li key={f} className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                      <span className="text-amber-600 font-bold">✓</span> {f}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <Link href="/pagamento" className="mt-8 block w-full text-center bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl text-sm shadow-md transition-colors">
+                Assinar Plano Família
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* FOOTER */}
       <footer className="bg-[#FAF9F6] py-12">
         <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
