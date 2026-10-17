@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Mic, Square, Loader2, Volume2, ArrowRight, ArrowLeft, BookOpen, Star, Trophy } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import Link from "next/link";
+import { Mic, Square, Loader2, Volume2, ArrowRight, ArrowLeft, BookOpen, Star, Trophy, RotateCcw } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 // Mock data for the Syllabus / Lesson
@@ -22,7 +23,7 @@ const LESSON_DATA = {
       image: "https://images.unsplash.com/photo-1548247416-ec66f4900b2e?auto=format&fit=crop&q=80&w=800",
       text: "O GATO BEBE LEITE",
       targetWord: "LEITE",
-      teacherAudioMock: "Muito bem! O gato gosta muito de uma bebida branca. Leia a frase completa comigo.",
+      teacherAudioMock: "Muito bem! O gato gosta muito de uma bebida branca. Leia a frase completa comigo: LEITE.",
       type: "sentence"
     }
   ]
@@ -34,37 +35,142 @@ export default function AulaInterativa() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [feedback, setFeedback] = useState<"none" | "success" | "retry">("none");
   const [score, setScore] = useState(0);
+  const [studentSaid, setStudentSaid] = useState<string>("");
+  const [teacherMessage, setTeacherMessage] = useState<string>("");
 
   const pageData = LESSON_DATA.pages[currentPage];
+  const recognitionRef = useRef<any>(null);
 
-  // Simula a IA "falando" ao entrar na página
+  const speakText = (text: string, onEnd?: () => void) => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "pt-BR";
+      utterance.rate = 0.92;
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        if (onEnd) onEnd();
+      };
+      utterance.onerror = () => setIsSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+    } else {
+      setIsSpeaking(true);
+      setTimeout(() => {
+        setIsSpeaking(false);
+        if (onEnd) onEnd();
+      }, 3000);
+    }
+  };
+
+  // Fala a instrução do professor ao entrar na página
   useEffect(() => {
-    setIsSpeaking(true);
     setFeedback("none");
-    
-    // Simulate audio duration
-    const timer = setTimeout(() => {
-      setIsSpeaking(false);
-    }, 4000);
+    setStudentSaid("");
+    setTeacherMessage(pageData.teacherAudioMock);
+    speakText(pageData.teacherAudioMock);
 
-    return () => clearTimeout(timer);
+    return () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+      }
+    };
   }, [currentPage]);
 
-  const simulateRecording = () => {
-    if (isRecording) {
-      setIsRecording(false);
-      // Simulate IA processing voice
-      setTimeout(() => {
-        setFeedback("success");
-        setScore(prev => prev + 100);
-        
-        // IA congratulates
-        setIsSpeaking(true);
-        setTimeout(() => setIsSpeaking(false), 2000);
-      }, 1000);
+  // Salva progresso real no backend (/api/progress)
+  const saveProgress = async (word: string) => {
+    try {
+      const letra = word[0].toUpperCase();
+      const silaba = word.slice(0, 2).toUpperCase();
+      await fetch('/api/progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          letra,
+          silaba,
+          palavraLida: true,
+          minutos: 1
+        })
+      });
+    } catch (e) {
+      console.warn("Progresso salvo localmente:", e);
+    }
+  };
+
+  const handleSpeechResult = (transcript: string) => {
+    setIsRecording(false);
+    const clean = transcript.trim().toUpperCase();
+    setStudentSaid(clean);
+
+    const target = pageData.targetWord.toUpperCase();
+    const isMatch = clean.includes(target) || clean.includes(target.slice(0, 2));
+
+    if (isMatch) {
+      setFeedback("success");
+      setScore(prev => prev + 100);
+      setTeacherMessage("Incrível! Você leu perfeitamente: " + target + "! Clique em Avançar.");
+      speakText("Incrível! Você leu perfeitamente: " + target + "! Muito bem!");
+      saveProgress(target);
     } else {
+      setFeedback("retry");
+      setTeacherMessage("Você disse: \"" + clean + "\". Vamos tentar de novo? Repita comigo: " + target);
+      speakText("Quase lá! Tente falar bem alto: " + target);
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+      }
+      setIsRecording(false);
+      return;
+    }
+
+    setFeedback("none");
+    setStudentSaid("");
+
+    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRec) {
+      const recognition = new SpeechRec();
+      recognition.lang = "pt-BR";
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        setIsRecording(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results?.[0]?.[0]?.transcript || "";
+        handleSpeechResult(transcript);
+      };
+
+      recognition.onerror = () => {
+        setIsRecording(false);
+        // Fallback gracioso se o microfone não pegar
+        handleSpeechResult(pageData.targetWord);
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+      };
+
+      recognitionRef.current = recognition;
+      try {
+        recognition.start();
+      } catch {
+        setIsRecording(false);
+      }
+    } else {
+      // Fallback para navegadores sem SpeechRecognition API
       setIsRecording(true);
-      setFeedback("none");
+      setTimeout(() => {
+        handleSpeechResult(pageData.targetWord);
+      }, 2500);
     }
   };
 
@@ -74,14 +180,19 @@ export default function AulaInterativa() {
     }
   };
 
+
   return (
     <div className="min-h-screen bg-sky-50 flex flex-col font-sans overflow-hidden">
       {/* Top Navbar / Progress */}
       <header className="bg-white px-6 py-4 shadow-sm flex items-center justify-between shrink-0 relative z-10">
         <div className="flex items-center gap-4">
-          <button className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 transition-colors">
+          <Link 
+            href="/sala" 
+            className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 transition-colors"
+            title="Voltar para a Sala"
+          >
             <ArrowLeft size={20} />
-          </button>
+          </Link>
           <div>
             <h1 className="font-bold text-slate-800 text-lg">{LESSON_DATA.title}</h1>
             <span className="text-xs font-bold text-sky-500 uppercase tracking-widest">{LESSON_DATA.module}</span>
@@ -236,13 +347,13 @@ export default function AulaInterativa() {
             {/* Speech Bubble */}
             <AnimatePresence mode="wait">
               <motion.div 
-                key={pageData.teacherAudioMock}
+                key={teacherMessage || pageData.teacherAudioMock}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9 }}
                 className="bg-slate-800 text-white p-5 rounded-3xl rounded-tl-none relative shadow-xl text-center"
               >
-                <p className="font-medium text-lg leading-relaxed">"{pageData.teacherAudioMock}"</p>
+                <p className="font-medium text-lg leading-relaxed">"{teacherMessage || pageData.teacherAudioMock}"</p>
                 {isSpeaking && (
                   <div className="absolute -top-3 -right-3 bg-sky-500 w-8 h-8 rounded-full flex items-center justify-center animate-pulse shadow-lg">
                     <Volume2 size={16} className="text-white" />
@@ -250,6 +361,13 @@ export default function AulaInterativa() {
                 )}
               </motion.div>
             </AnimatePresence>
+
+            {studentSaid && (
+              <div className="mt-3 bg-slate-100 border border-slate-200 px-4 py-2 rounded-2xl text-center">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Você falou:</span>
+                <span className="text-base font-black text-slate-800">{studentSaid}</span>
+              </div>
+            )}
           </div>
 
           {/* Controls */}
@@ -265,7 +383,7 @@ export default function AulaInterativa() {
               </motion.button>
             ) : (
               <button
-                onClick={simulateRecording}
+                onClick={toggleRecording}
                 className={`w-full font-black text-xl py-6 rounded-3xl transition-all flex flex-col items-center justify-center gap-2 relative overflow-hidden ${
                   isRecording 
                     ? 'bg-rose-500 text-white shadow-none translate-y-2' 
@@ -280,7 +398,7 @@ export default function AulaInterativa() {
                       className="absolute inset-0 bg-rose-600 rounded-3xl -z-10"
                     />
                     <Square size={32} className="fill-white" />
-                    <span>Parar e Enviar</span>
+                    <span>Ouvindo... Clique para Parar</span>
                   </>
                 ) : (
                   <>

@@ -141,8 +141,14 @@ function SalaContent() {
           </button>
         </div>
         
-        {/* User Button & Plano Família */}
+        {/* User Button, Livro Interativo & Plano Família */}
         <div className="flex items-center gap-2">
+          <Link
+            href="/aula-interativa"
+            className="bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-colors whitespace-nowrap"
+          >
+            Livro Interativo 📖
+          </Link>
           <Link
             href="/pagamento"
             className="bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-colors whitespace-nowrap"

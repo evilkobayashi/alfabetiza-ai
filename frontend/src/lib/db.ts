@@ -53,3 +53,68 @@ export async function setUserProStatus(
     RETURNING *;
   `
 }
+
+export async function ensureProgressTable() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS alfabetiza_progress (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      letras_aprendidas TEXT[] DEFAULT '{}',
+      silabas_aprendidas TEXT[] DEFAULT '{}',
+      palavras_lidas INTEGER DEFAULT 0,
+      minutos_estudo INTEGER DEFAULT 0,
+      ultima_sessao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+  `.catch(() => {})
+}
+
+export async function getUserProgress(userId: string) {
+  await ensureProgressTable()
+  const rows = await sql`
+    SELECT * FROM alfabetiza_progress WHERE user_id = ${userId} LIMIT 1
+  `
+  if (rows.length > 0) return rows[0]
+
+  const inserted = await sql`
+    INSERT INTO alfabetiza_progress (user_id, letras_aprendidas, silabas_aprendidas, palavras_lidas, minutos_estudo)
+    VALUES (${userId}, ARRAY['A', 'E', 'I', 'O', 'U'], ARRAY['BA', 'BE'], 0, 0)
+    RETURNING *;
+  `
+  return inserted[0]
+}
+
+export async function saveUserProgress(
+  userId: string,
+  data: { letra?: string; silaba?: string; palavraLida?: boolean; minutos?: number }
+) {
+  await ensureProgressTable()
+  const current = await getUserProgress(userId)
+
+  let letras: string[] = current.letras_aprendidas || []
+  if (data.letra && !letras.includes(data.letra.toUpperCase())) {
+    letras = [...letras, data.letra.toUpperCase()]
+  }
+
+  let silabas: string[] = current.silabas_aprendidas || []
+  if (data.silaba && !silabas.includes(data.silaba.toUpperCase())) {
+    silabas = [...silabas, data.silaba.toUpperCase()]
+  }
+
+  const palavrasLidas = (current.palavras_lidas || 0) + (data.palavraLida ? 1 : 0)
+  const minutos = (current.minutos_estudo || 0) + (data.minutos || 1)
+
+  const updated = await sql`
+    UPDATE alfabetiza_progress
+    SET 
+      letras_aprendidas = ${letras},
+      silabas_aprendidas = ${silabas},
+      palavras_lidas = ${palavrasLidas},
+      minutos_estudo = ${minutos},
+      ultima_sessao = NOW()
+    WHERE user_id = ${userId}
+    RETURNING *;
+  `
+  return updated[0]
+}
+
