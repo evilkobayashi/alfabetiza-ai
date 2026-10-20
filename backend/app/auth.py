@@ -40,11 +40,11 @@ async def get_user_id(authorization: str = Header(default="")) -> str:
     day = time.strftime("%Y-%m-%d", time.gmtime())
     for k in [k for k in _usage if k[1] != day]:
         del _usage[k]
-    limit = int(os.getenv("DAILY_VOICE_LIMIT", "10"))
+    limit = int(os.getenv("DAILY_VOICE_LIMIT", "100"))
     if _usage[(user_id, day)] >= limit:
         raise HTTPException(
             status_code=429, 
-            detail="Limite diário de 10 conversas gratuitas atingido. Assine o Plano Família para conversas ilimitadas!"
+            detail=f"Limite diário de {limit} conversas gratuitas atingido. Assine o Plano Família para conversas ilimitadas!"
         )
     _usage[(user_id, day)] += 1
     return user_id

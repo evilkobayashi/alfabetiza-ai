@@ -2,44 +2,184 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { useAuth } from "@clerk/nextjs";
 import { Mic, Square, Loader2, Volume2, ArrowRight, ArrowLeft, BookOpen, Star, Trophy, RotateCcw } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
-// Mock data for the Syllabus / Lesson
-const LESSON_DATA = {
-  title: "Aventuras com a Letra G",
-  module: "Módulo 2: Animais",
-  pages: [
-    {
-      id: 1,
-      image: "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&q=80&w=800",
-      text: "O GATO",
-      targetWord: "GATO",
-      teacherAudioMock: "Veja a foto. Que animal é esse? Tente ler a palavra em voz alta: GATO.",
-      type: "read"
-    },
-    {
-      id: 2,
-      image: "https://images.unsplash.com/photo-1548247416-ec66f4900b2e?auto=format&fit=crop&q=80&w=800",
-      text: "O GATO BEBE LEITE",
-      targetWord: "LEITE",
-      teacherAudioMock: "Muito bem! O gato gosta muito de uma bebida branca. Leia a frase completa comigo: LEITE.",
-      type: "sentence"
-    }
-  ]
-};
+interface LessonPage {
+  id: number;
+  module: string;
+  title: string;
+  image: string;
+  text: string;
+  targetWord: string;
+  syllables: string;
+  teacherAudioMock: string;
+  type: "read" | "sentence";
+}
+
+const LESSON_PAGES: LessonPage[] = [
+  {
+    id: 1,
+    module: "Módulo 1: Vogais e Sons",
+    title: "A Letra A da Abelha",
+    image: "https://images.unsplash.com/photo-1587049352847-4a222e784d38?auto=format&fit=crop&q=80&w=800",
+    text: "A ABELHA",
+    targetWord: "ABELHA",
+    syllables: "A - BE - LHA",
+    teacherAudioMock: "Veja a abelha na flor! Ela começa com a vogal A. Fale em voz alta: ABELHA.",
+    type: "read"
+  },
+  {
+    id: 2,
+    module: "Módulo 1: Vogais e Sons",
+    title: "A Bola Colorida",
+    image: "https://images.unsplash.com/photo-1575361204480-aadea25e6e68?auto=format&fit=crop&q=80&w=800",
+    text: "A BOLA",
+    targetWord: "BOLA",
+    syllables: "BO - LA",
+    teacherAudioMock: "Olhe a bola no campo! Vamos juntar BO com LA. Diga em voz alta: BOLA.",
+    type: "read"
+  },
+  {
+    id: 3,
+    module: "Módulo 2: Animais",
+    title: "Aventuras com a Letra G",
+    image: "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&q=80&w=800",
+    text: "O GATO",
+    targetWord: "GATO",
+    syllables: "GA - TO",
+    teacherAudioMock: "Veja a foto. Que animal é esse? Tente ler a palavra em voz alta: GATO.",
+    type: "read"
+  },
+  {
+    id: 4,
+    module: "Módulo 2: Animais",
+    title: "Aventuras com a Letra G",
+    image: "https://images.unsplash.com/photo-1548247416-ec66f4900b2e?auto=format&fit=crop&q=80&w=800",
+    text: "O GATO BEBE LEITE",
+    targetWord: "LEITE",
+    syllables: "LEI - TE",
+    teacherAudioMock: "Muito bem! O gato gosta muito de uma bebida branca. Leia a palavra destacada: LEITE.",
+    type: "sentence"
+  },
+  {
+    id: 5,
+    module: "Módulo 2: Animais",
+    title: "O Pato na Lagoa",
+    image: "https://images.unsplash.com/photo-1555852095-64e7428df0fa?auto=format&fit=crop&q=80&w=800",
+    text: "O PATO NADA",
+    targetWord: "PATO",
+    syllables: "PA - TO",
+    teacherAudioMock: "Quem está nadando na água? É o pato! Junte PA com TO e fale: PATO.",
+    type: "read"
+  },
+  {
+    id: 6,
+    module: "Módulo 2: Animais",
+    title: "O Cachorro Amigo",
+    image: "https://images.unsplash.com/photo-1543466835-00a7907e9de1?auto=format&fit=crop&q=80&w=800",
+    text: "O CACHORRO",
+    targetWord: "CACHORRO",
+    syllables: "CA - CHOR - RO",
+    teacherAudioMock: "Que amigo fiel! Vamos falar o nome dele em voz alta: CACHORRO.",
+    type: "read"
+  },
+  {
+    id: 7,
+    module: "Módulo 3: Cotidiano e Casa",
+    title: "Nossa Moradia",
+    image: "https://images.unsplash.com/photo-1518780664697-55e3ad937233?auto=format&fit=crop&q=80&w=800",
+    text: "A CASA BONITA",
+    targetWord: "CASA",
+    syllables: "CA - SA",
+    teacherAudioMock: "Onde nós moramos com nossa família? Na casa! Diga em voz alta: CASA.",
+    type: "read"
+  },
+  {
+    id: 8,
+    module: "Módulo 3: Cotidiano e Casa",
+    title: "Hora de Aprender",
+    image: "https://images.unsplash.com/photo-1503676260728-1c00da094a0b?auto=format&fit=crop&q=80&w=800",
+    text: "EU VOU PARA A ESCOLA",
+    targetWord: "ESCOLA",
+    syllables: "ES - CO - LA",
+    teacherAudioMock: "Lugar de aprender e fazer amigos! Leia a palavra destacada: ESCOLA.",
+    type: "sentence"
+  },
+  {
+    id: 9,
+    module: "Módulo 4: Pequenas Frases",
+    title: "Dia Ensolarado",
+    image: "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&q=80&w=800",
+    text: "O SOL BRILHA NO CÉU",
+    targetWord: "SOL",
+    syllables: "SOL",
+    teacherAudioMock: "Olhe que dia lindo! Quem está brilhando lá no alto? Diga em voz alta: SOL.",
+    type: "sentence"
+  },
+  {
+    id: 10,
+    module: "Módulo 4: Pequenas Frases",
+    title: "Amor pela Leitura",
+    image: "https://images.unsplash.com/photo-1512820790803-83ca734da794?auto=format&fit=crop&q=80&w=800",
+    text: "EU GOSTO DE LER LIVROS",
+    targetWord: "LIVROS",
+    syllables: "LI - VROS",
+    teacherAudioMock: "Você está lendo cada vez melhor! Para fechar com chave de ouro, diga: LIVROS.",
+    type: "sentence"
+  }
+];
+
+function normalizePt(str: string): string {
+  return str
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, "")
+    .trim();
+}
+
+function phoneticMatch(spokenRaw: string, targetRaw: string): boolean {
+  const spoken = normalizePt(spokenRaw);
+  const target = normalizePt(targetRaw);
+  if (!spoken || !target) return false;
+  if (spoken.includes(target) || target.includes(spoken)) return true;
+
+  // Variações fonéticas comuns na fala brasileira (O -> U no final, E -> I no final, plural)
+  const phoneticNormalize = (w: string) =>
+    w.replace(/S$/, "").replace(/U$/, "O").replace(/I$/, "E").replace(/LH/g, "LI").replace(/RR/g, "R");
+
+  const words = spoken.split(/\s+/);
+  const normTarget = phoneticNormalize(target);
+  for (const w of words) {
+    const nw = phoneticNormalize(w);
+    if (nw === normTarget) return true;
+    // Se acertou pelo menos a primeira sílaba (3+ letras ou 2 letras em palavras curtas)
+    if (normTarget.length >= 4 && nw.length >= 3 && normTarget.startsWith(nw.slice(0, 3))) return true;
+    if (normTarget.length <= 4 && nw.length >= 2 && normTarget.startsWith(nw.slice(0, 2))) return true;
+  }
+  return false;
+}
 
 export default function AulaInterativa() {
+  const { getToken } = useAuth();
   const [currentPage, setCurrentPage] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [feedback, setFeedback] = useState<"none" | "success" | "retry">("none");
   const [score, setScore] = useState(0);
   const [studentSaid, setStudentSaid] = useState<string>("");
   const [teacherMessage, setTeacherMessage] = useState<string>("");
 
-  const pageData = LESSON_DATA.pages[currentPage];
+  const pageData = LESSON_PAGES[currentPage];
   const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const interimTranscriptRef = useRef<string>("");
+  const handledRef = useRef<boolean>(false);
 
   const speakText = (text: string, onEnd?: () => void) => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
@@ -59,11 +199,10 @@ export default function AulaInterativa() {
       setTimeout(() => {
         setIsSpeaking(false);
         if (onEnd) onEnd();
-      }, 3000);
+      }, 2500);
     }
   };
 
-  // Fala a instrução do professor ao entrar na página
   useEffect(() => {
     setFeedback("none");
     setStudentSaid("");
@@ -77,10 +216,12 @@ export default function AulaInterativa() {
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch {}
       }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
     };
   }, [currentPage]);
 
-  // Salva progresso real no backend (/api/progress)
   const saveProgress = async (word: string) => {
     try {
       const letra = word[0].toUpperCase();
@@ -101,82 +242,176 @@ export default function AulaInterativa() {
   };
 
   const handleSpeechResult = (transcript: string) => {
+    if (handledRef.current) return;
+    handledRef.current = true;
     setIsRecording(false);
+    setIsProcessing(false);
+
     const clean = transcript.trim().toUpperCase();
-    setStudentSaid(clean);
+    setStudentSaid(clean || "...");
 
     const target = pageData.targetWord.toUpperCase();
-    const isMatch = clean.includes(target) || clean.includes(target.slice(0, 2));
+    const isMatch = phoneticMatch(clean, target) || phoneticMatch(clean, pageData.text);
 
     if (isMatch) {
       setFeedback("success");
       setScore(prev => prev + 100);
-      setTeacherMessage("Incrível! Você leu perfeitamente: " + target + "! Clique em Avançar.");
-      speakText("Incrível! Você leu perfeitamente: " + target + "! Muito bem!");
+      setTeacherMessage(`Incrível! Você leu perfeitamente: ${target} (${pageData.syllables})! Clique em Avançar.`);
+      speakText(`Incrível! Você leu perfeitamente: ${target}! Muito bem!`);
       saveProgress(target);
     } else {
       setFeedback("retry");
-      setTeacherMessage("Você disse: \"" + clean + "\". Vamos tentar de novo? Repita comigo: " + target);
-      speakText("Quase lá! Tente falar bem alto: " + target);
+      const heardMsg = clean ? `Eu ouvi "${clean}". ` : "O som ficou baixinho. ";
+      setTeacherMessage(`${heardMsg}Vamos tentar de novo? Fale pausadamente: ${pageData.syllables} (${target}).`);
+      speakText(`Quase lá! Fale comigo: ${pageData.syllables}. ${target}!`);
     }
   };
 
-  const toggleRecording = () => {
+  const stopAllCapture = () => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+      recognitionRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try { mediaRecorderRef.current.stop(); } catch {}
+    }
+  };
+
+  const toggleRecording = async () => {
     if (isRecording) {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch {}
-      }
       setIsRecording(false);
+      setIsProcessing(true);
+      stopAllCapture();
       return;
+    }
+
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
     }
 
     setFeedback("none");
     setStudentSaid("");
+    interimTranscriptRef.current = "";
+    handledRef.current = false;
 
+    // 1. Inicia gravação MediaRecorder para enviar ao Whisper STT no backend
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      streamRef.current = stream;
+
+      let chosenMime = "audio/webm";
+      if (typeof MediaRecorder !== "undefined") {
+        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) chosenMime = "audio/webm;codecs=opus";
+        else if (MediaRecorder.isTypeSupported("audio/mp4")) chosenMime = "audio/mp4";
+        else if (MediaRecorder.isTypeSupported("audio/ogg")) chosenMime = "audio/ogg";
+      }
+
+      const mr = new MediaRecorder(stream, { mimeType: chosenMime });
+      mediaRecorderRef.current = mr;
+      audioChunksRef.current = [];
+
+      mr.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) audioChunksRef.current.push(ev.data);
+      };
+
+      mr.onstop = async () => {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
+        }
+        if (handledRef.current) return;
+
+        // Se o navegador já capturou a palavra certa via Web Speech API, usa imediatamente
+        if (interimTranscriptRef.current && phoneticMatch(interimTranscriptRef.current, pageData.targetWord)) {
+          handleSpeechResult(interimTranscriptRef.current);
+          return;
+        }
+
+        const actualMime = chosenMime.split(";")[0].trim() || "audio/webm";
+        const blob = new Blob(audioChunksRef.current, { type: actualMime });
+        if (blob.size < 350) {
+          handleSpeechResult(interimTranscriptRef.current || "");
+          return;
+        }
+
+        try {
+          setIsProcessing(true);
+          const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://alfabetiza-ai-production.up.railway.app";
+          const token = await getToken();
+          const formData = new FormData();
+          const ext = actualMime.includes("mp4") ? "mp4" : actualMime.includes("ogg") ? "ogg" : "webm";
+          formData.append("audio_file", blob, `lesson.${ext}`);
+          formData.append("target_hint", `${pageData.targetWord}, ${pageData.text}`);
+
+          const res = await fetch(`${API_URL}/api/voice/transcribe`, {
+            method: "POST",
+            body: formData,
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data.text) {
+              handleSpeechResult(data.text);
+              return;
+            }
+          }
+        } catch (err) {
+          console.warn("Fallback local SpeechRecognition:", err);
+        }
+
+        handleSpeechResult(interimTranscriptRef.current || "");
+      };
+
+      mr.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Erro ao acessar microfone:", err);
+      alert("Permissão de microfone necessária para praticar a leitura!");
+      return;
+    }
+
+    // 2. Em paralelo, ativa SpeechRecognition nativo do navegador para detecção instantânea
     const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRec) {
-      const recognition = new SpeechRec();
-      recognition.lang = "pt-BR";
-      recognition.continuous = false;
-      recognition.interimResults = false;
-
-      recognition.onstart = () => {
-        setIsRecording(true);
-      };
-
-      recognition.onresult = (event: any) => {
-        const transcript = event.results?.[0]?.[0]?.transcript || "";
-        handleSpeechResult(transcript);
-      };
-
-      recognition.onerror = () => {
-        setIsRecording(false);
-        // Fallback gracioso se o microfone não pegar
-        handleSpeechResult(pageData.targetWord);
-      };
-
-      recognition.onend = () => {
-        setIsRecording(false);
-      };
-
-      recognitionRef.current = recognition;
       try {
+        const recognition = new SpeechRec();
+        recognition.lang = "pt-BR";
+        recognition.continuous = true;
+        recognition.interimResults = true;
+
+        recognition.onresult = (event: any) => {
+          let combined = "";
+          for (let i = 0; i < event.results.length; i++) {
+            combined += event.results[i][0].transcript + " ";
+          }
+          interimTranscriptRef.current = combined.trim();
+          if (phoneticMatch(interimTranscriptRef.current, pageData.targetWord)) {
+            stopAllCapture();
+            handleSpeechResult(interimTranscriptRef.current);
+          }
+        };
+
+        recognitionRef.current = recognition;
         recognition.start();
-      } catch {
-        setIsRecording(false);
-      }
-    } else {
-      // Fallback para navegadores sem SpeechRecognition API
-      setIsRecording(true);
-      setTimeout(() => {
-        handleSpeechResult(pageData.targetWord);
-      }, 2500);
+      } catch {}
     }
   };
 
   const nextPage = () => {
-    if (currentPage < LESSON_DATA.pages.length - 1) {
+    if (currentPage < LESSON_PAGES.length - 1) {
       setCurrentPage(prev => prev + 1);
+    } else {
+      setCurrentPage(0);
+    }
+  };
+
+  const prevPage = () => {
+    if (currentPage > 0) {
+      setCurrentPage(prev => prev - 1);
     }
   };
 
@@ -194,25 +429,42 @@ export default function AulaInterativa() {
             <ArrowLeft size={20} />
           </Link>
           <div>
-            <h1 className="font-bold text-slate-800 text-lg">{LESSON_DATA.title}</h1>
-            <span className="text-xs font-bold text-sky-500 uppercase tracking-widest">{LESSON_DATA.module}</span>
+            <h1 className="font-bold text-slate-800 text-lg">{pageData.title}</h1>
+            <span className="text-xs font-bold text-sky-500 uppercase tracking-widest">{pageData.module}</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-4 md:gap-6">
           <div className="flex items-center gap-2 bg-amber-100 px-4 py-2 rounded-full border border-amber-200">
             <Star className="text-amber-500 fill-amber-500" size={18} />
             <span className="font-black text-amber-700">{score} XP</span>
           </div>
           
           <div className="flex items-center gap-2">
-            <div className="w-32 h-3 bg-slate-100 rounded-full overflow-hidden">
+            <button
+              type="button"
+              onClick={prevPage}
+              disabled={currentPage === 0}
+              className="p-1.5 rounded-full bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-600 transition-colors cursor-pointer"
+              title="Lição anterior"
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <div className="w-24 md:w-32 h-3 bg-slate-100 rounded-full overflow-hidden">
               <div 
                 className="h-full bg-sky-500 rounded-full transition-all duration-500"
-                style={{ width: `${((currentPage) / LESSON_DATA.pages.length) * 100}%` }}
+                style={{ width: `${((currentPage + 1) / LESSON_PAGES.length) * 100}%` }}
               />
             </div>
-            <span className="text-sm font-bold text-slate-400">{currentPage + 1}/{LESSON_DATA.pages.length}</span>
+            <span className="text-sm font-bold text-slate-500">{currentPage + 1}/{LESSON_PAGES.length}</span>
+            <button
+              type="button"
+              onClick={nextPage}
+              className="p-1.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors cursor-pointer"
+              title="Próxima lição"
+            >
+              <ArrowRight size={16} />
+            </button>
           </div>
         </div>
       </header>
@@ -232,7 +484,7 @@ export default function AulaInterativa() {
               className="bg-white rounded-[2.5rem] p-4 shadow-xl border-4 border-slate-100 flex-1 flex flex-col overflow-hidden relative"
             >
               {/* Image / Illustration */}
-              <div className="w-full h-[40vh] md:h-[50vh] rounded-[2rem] overflow-hidden relative bg-slate-100">
+              <div className="w-full h-[38vh] md:h-[46vh] rounded-[2rem] overflow-hidden relative bg-slate-100">
                 <img 
                   src={pageData.image} 
                   alt="Ilustração do Livro" 
@@ -261,8 +513,8 @@ export default function AulaInterativa() {
                 </AnimatePresence>
               </div>
 
-              {/* Text to Read */}
-              <div className="flex-1 flex items-center justify-center p-8">
+              {/* Text to Read & Syllables */}
+              <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
                 <h2 className="text-4xl md:text-6xl font-black text-slate-800 text-center tracking-tight leading-tight">
                   {pageData.text.split(' ').map((word, i) => (
                     <span 
@@ -279,6 +531,15 @@ export default function AulaInterativa() {
                     </span>
                   ))}
                 </h2>
+
+                <button
+                  type="button"
+                  onClick={() => speakText(`${pageData.syllables.replace(/-/g, "... ")}. ${pageData.targetWord}!`)}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 font-black text-lg transition-all cursor-pointer active:scale-95"
+                >
+                  <Volume2 size={20} className="text-sky-500" />
+                  <span>Sílabas: {pageData.syllables}</span>
+                </button>
               </div>
             </motion.div>
           </AnimatePresence>
@@ -308,7 +569,7 @@ export default function AulaInterativa() {
                 rotate: isSpeaking ? [0, 5, -5, 0] : 0
               }}
               transition={{ repeat: Infinity, duration: 2 }}
-              className="w-48 h-48 rounded-full border-8 border-sky-400 bg-sky-200 flex items-center justify-center relative shadow-inner mb-6"
+              className="w-40 h-40 md:w-48 md:h-48 rounded-full border-8 border-sky-400 bg-sky-200 flex items-center justify-center relative shadow-inner mb-6"
             >
               {/* Eyes */}
               <div className="absolute top-12 left-10 w-8 h-8 bg-slate-800 rounded-full overflow-hidden">
@@ -371,26 +632,34 @@ export default function AulaInterativa() {
           </div>
 
           {/* Controls */}
-          <div className="bg-white rounded-[2.5rem] p-6 shadow-lg border-4 border-slate-100 flex flex-col items-center justify-center gap-4 shrink-0">
+          <div className="bg-white rounded-[2.5rem] p-6 shadow-lg border-4 border-slate-100 flex flex-col items-center justify-center gap-3 shrink-0">
             {feedback === "success" ? (
               <motion.button
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 onClick={nextPage}
-                className="w-full bg-green-500 hover:bg-green-600 text-white font-black text-xl py-6 rounded-3xl shadow-[0_8px_0_rgb(21,128,61)] active:translate-y-2 active:shadow-none transition-all flex items-center justify-center gap-3"
+                className="w-full bg-green-500 hover:bg-green-600 text-white font-black text-xl py-6 rounded-3xl shadow-[0_8px_0_rgb(21,128,61)] active:translate-y-2 active:shadow-none transition-all flex items-center justify-center gap-3 cursor-pointer"
               >
-                Avançar <ArrowRight size={28} />
+                {currentPage < LESSON_PAGES.length - 1 ? "Próxima Palavra" : "Recomeçar Livro"} <ArrowRight size={28} />
               </motion.button>
             ) : (
               <button
                 onClick={toggleRecording}
-                className={`w-full font-black text-xl py-6 rounded-3xl transition-all flex flex-col items-center justify-center gap-2 relative overflow-hidden ${
-                  isRecording 
+                disabled={isProcessing}
+                className={`w-full font-black text-xl py-6 rounded-3xl transition-all flex flex-col items-center justify-center gap-2 relative overflow-hidden cursor-pointer ${
+                  isProcessing
+                    ? 'bg-amber-500 text-white'
+                    : isRecording 
                     ? 'bg-rose-500 text-white shadow-none translate-y-2' 
                     : 'bg-sky-500 hover:bg-sky-400 text-white shadow-[0_8px_0_rgb(2,132,199)] active:translate-y-2 active:shadow-none'
                 }`}
               >
-                {isRecording ? (
+                {isProcessing ? (
+                  <>
+                    <Loader2 size={32} className="animate-spin" />
+                    <span>Avaliando sua voz...</span>
+                  </>
+                ) : isRecording ? (
                   <>
                     <motion.div 
                       animate={{ scale: [1, 1.5, 1] }} 
@@ -398,7 +667,7 @@ export default function AulaInterativa() {
                       className="absolute inset-0 bg-rose-600 rounded-3xl -z-10"
                     />
                     <Square size={32} className="fill-white" />
-                    <span>Ouvindo... Clique para Parar</span>
+                    <span>Ouvindo... Clique para Enviar</span>
                   </>
                 ) : (
                   <>
@@ -409,9 +678,19 @@ export default function AulaInterativa() {
               </button>
             )}
             
-            {!isRecording && feedback !== "success" && (
-              <p className="text-slate-400 text-sm font-bold text-center mt-2">
-                O professor está aguardando você tentar!
+            {feedback === "retry" && !isRecording && !isProcessing && (
+              <button
+                type="button"
+                onClick={nextPage}
+                className="text-sky-600 hover:text-sky-800 text-sm font-bold underline cursor-pointer mt-1"
+              >
+                Pular para a próxima palavra →
+              </button>
+            )}
+
+            {!isRecording && !isProcessing && feedback === "none" && (
+              <p className="text-slate-400 text-sm font-bold text-center mt-1">
+                Fale a palavra sublinhada e clique para enviar!
               </p>
             )}
           </div>

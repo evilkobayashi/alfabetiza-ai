@@ -1,9 +1,42 @@
 import base64
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from app.auth import get_user_id
-from app.services.voice_ai_service import process_audio_interaction
+from app.services.voice_ai_service import process_audio_interaction, transcribe_audio_only
 
 router = APIRouter(prefix="/api/voice", tags=["Alfabetiza AÍ - Voice"], dependencies=[Depends(get_user_id)])
+
+
+def _detect_mime(audio_bytes: bytes, raw_mime: str) -> str:
+    mime_type = raw_mime
+    if len(audio_bytes) >= 4:
+        if audio_bytes[:4] == b"RIFF":
+            mime_type = "audio/wav"
+        elif audio_bytes[:4] == b"OggS":
+            mime_type = "audio/ogg"
+        elif audio_bytes[:4] == b"\x1aE\xdf\xa3":
+            mime_type = "audio/webm"
+        elif audio_bytes[:3] == b"ID3" or audio_bytes[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+            mime_type = "audio/mp3"
+        elif len(audio_bytes) >= 12 and audio_bytes[4:8] == b"ftyp":
+            mime_type = "audio/mp4"
+    return mime_type
+
+
+@router.post("/transcribe")
+async def transcribe_voice(
+    audio_file: UploadFile = File(...),
+    target_hint: str = Form("")
+):
+    """Transcreve o áudio enviado pelo aluno usando Whisper STT / Gemini."""
+    audio_bytes = await audio_file.read()
+    if len(audio_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Arquivo de áudio excede o limite de 10 MB.")
+    if len(audio_bytes) < 350:
+        return {"text": ""}
+    raw_mime = (audio_file.content_type or "audio/webm").split(";")[0].strip()
+    mime_type = _detect_mime(audio_bytes, raw_mime)
+    text = await transcribe_audio_only(audio_bytes, mime_type, target_hint[:200])
+    return {"text": text}
 
 @router.post("/chat")
 async def chat_voice(
@@ -28,28 +61,18 @@ async def chat_voice(
         raw_mime = (audio_file.content_type or "audio/webm").split(";")[0].strip()
         
         # Detecção de mime type real por magic bytes
-        mime_type = raw_mime
-        if len(audio_bytes) >= 4:
-            if audio_bytes[:4] == b"RIFF":
-                mime_type = "audio/wav"
-            elif audio_bytes[:4] == b"OggS":
-                mime_type = "audio/ogg"
-            elif audio_bytes[:4] == b"\x1aE\xdf\xa3":
-                mime_type = "audio/webm"
-            elif audio_bytes[:3] == b"ID3" or audio_bytes[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
-                mime_type = "audio/mp3"
-            elif len(audio_bytes) >= 12 and audio_bytes[4:8] == b"ftyp":
-                mime_type = "audio/mp4"
+        mime_type = _detect_mime(audio_bytes, raw_mime)
 
         import logging
         logging.getLogger(__name__).info(
             f"Recebido áudio: {len(audio_bytes)} bytes | filename={audio_file.filename} | raw_mime={raw_mime} | mime_detectado={mime_type} | perfil={profile}"
         )
 
-        if len(audio_bytes) < 600:
+        if len(audio_bytes) < 400:
             return {
                 "profile": profile,
                 "transcription_or_reasoning": "O áudio ficou muito curtinho ou sem som. Clique no microfone, fale com calma e clique para enviar!",
+                "student_transcription": "",
                 "audio_base64": "",
                 "mime_type": "audio/mp3"
             }

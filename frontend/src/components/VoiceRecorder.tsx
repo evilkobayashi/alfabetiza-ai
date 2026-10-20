@@ -9,6 +9,12 @@ interface VoiceRecorderProps {
   animationsEnabled?: boolean;
 }
 
+const SUGGESTIONS: Record<"KIDS" | "EJA" | "PCD", string[]> = {
+  KIDS: ["Bola", "Gato", "Casa", "Sapo", "Escola", "Pipoca"],
+  PCD: ["Casa", "Água", "Livro", "Mesa", "Escola", "Amigo"],
+  EJA: ["Trabalho", "Saúde", "Mercado", "Ônibus", "Família", "Documento"],
+};
+
 export default function VoiceRecorder({ profile, animationsEnabled = true }: VoiceRecorderProps) {
   const { getToken } = useAuth();
   const [isStarting, setIsStarting] = useState(false);
@@ -16,6 +22,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
   const [isProcessing, setIsProcessing] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [transcription, setTranscription] = useState("");
+  const [studentSaid, setStudentSaid] = useState("");
   const [contextHistory, setContextHistory] = useState("");
   const [isConversationMode, setIsConversationMode] = useState(false);
   
@@ -26,6 +33,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
   const mimeTypeRef = useRef<string>("audio/webm");
   const audioContextRef = useRef<AudioContext | null>(null);
   const silenceStartRef = useRef<number | null>(null);
+  const hasSpokenRef = useRef<boolean>(false);
   const rafRef = useRef<number | null>(null);
   const isHandsFreeRef = useRef<boolean>(false);
   // Limpeza ao desmontar componente
@@ -43,6 +51,9 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
     setIsStarting(true);
     setRecordingSeconds(0);
     setTranscription("");
+    setStudentSaid("");
+    hasSpokenRef.current = false;
+    silenceStartRef.current = null;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -80,10 +91,15 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
 
       mediaRecorder.onstop = async () => {
         setIsProcessing(true);
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+          streamRef.current = null;
+        }
+
         const actualMime = mimeTypeRef.current.split(";")[0].trim() || "audio/webm";
         const audioBlob = new Blob(audioChunksRef.current, { type: actualMime });
         
-        if (audioBlob.size < 800) {
+        if (audioBlob.size < 350) {
           setTranscription("O áudio ficou muito curtinho ou sem som. Clique no microfone, fale com calma e clique para enviar!");
           setIsProcessing(false);
           return;
@@ -92,7 +108,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
         await sendAudioToBackend(audioBlob, actualMime);
       };
 
-      mediaRecorder.start(250);
+      mediaRecorder.start();
       setIsStarting(false);
       setIsRecording(true);
 
@@ -118,16 +134,24 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
         for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
         const average = sum / dataArray.length;
 
-        if (average > 15) { // Som detectado (usuário falando)
+        if (average > 14) {
+          // Voz detectada
+          hasSpokenRef.current = true;
           silenceStartRef.current = null;
         } else {
           // Silêncio
           if (!silenceStartRef.current) silenceStartRef.current = Date.now();
-          // Se ficou > 2.5s em silêncio e tem algo gravado E estamos no modo mãos livres
-          if (Date.now() - silenceStartRef.current > 2500) {
-            if (isHandsFreeRef.current) {
-               stopRecording();
-               return; // Encapsula raf
+          
+          if (isHandsFreeRef.current) {
+            // Se já falou e agora silenciou por 1.8s -> envia
+            if (hasSpokenRef.current && Date.now() - silenceStartRef.current > 1800) {
+              stopRecording();
+              return;
+            }
+            // Se ainda nem falou após 7s de silêncio -> para para não prender
+            if (!hasSpokenRef.current && Date.now() - silenceStartRef.current > 7000) {
+              stopRecording();
+              return;
             }
           }
         }
@@ -163,19 +187,11 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
 
     setIsRecording(false);
 
-    // Garante que o gravador recolha os últimos milissegundos de fala
-    setTimeout(() => {
-      try {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-          mediaRecorderRef.current.stop();
-        }
-      } catch {}
-
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
+    try {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
       }
-    }, 350);
+    } catch {}
   };
 
   const sendAudioToBackend = async (audioBlob: Blob, actualMime: string) => {
@@ -208,7 +224,29 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
       }
       const data = await response.json();
       setTranscription(data.transcription_or_reasoning);
-      setContextHistory(prev => `${prev}\nAluno: ${data.student_transcription || "..."}\nProfessor: ${data.transcription_or_reasoning}`);
+      if (data.student_transcription && !data.student_transcription.startsWith("[")) {
+        setStudentSaid(data.student_transcription);
+        const cleanWord = data.student_transcription.trim().replace(/[^a-zA-ZÀ-ÿ]/g, "");
+        if (cleanWord.length >= 1) {
+          fetch("/api/progress", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              letra: cleanWord[0].toUpperCase(),
+              silaba: cleanWord.slice(0, 2).toUpperCase(),
+              palavraLida: cleanWord.length >= 3,
+              minutos: 1,
+            }),
+          }).catch(() => {});
+        }
+      }
+      
+      // Mantém histórico recente limpo (no máximo 3 rodadas) para não poluir o raciocínio da IA
+      setContextHistory(prev => {
+        const turn = `Aluno: ${data.student_transcription || "..."}\nProfessor: ${data.transcription_or_reasoning}`;
+        const lines = (prev ? `${prev}\n${turn}` : turn).split("\n").filter(Boolean);
+        return lines.slice(-6).join("\n");
+      });
 
       if (data.audio_base64) {
         const audioSrc = `data:${data.mime_type};base64,${data.audio_base64}`;
@@ -334,8 +372,44 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
         )}
       </div>
 
+      {/* Sugestões rápidas de palavras */}
+      <div className="w-full text-center space-y-2">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          Sugestões para falar no microfone:
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {SUGGESTIONS[profile].map((word) => (
+            <button
+              key={word}
+              type="button"
+              onClick={() => {
+                setStudentSaid("");
+                setContextHistory(`Professor: Vamos aprender a palavra ${word}! Diga ${word} no microfone.`);
+                setTranscription(`Vamos praticar a palavra "${word.toUpperCase()}"! Clique no microfone e fale: ${word.toUpperCase()}.`);
+              }}
+              className="px-3.5 py-1.5 rounded-full text-xs md:text-sm font-bold bg-white/80 hover:bg-white text-slate-700 border border-slate-200 shadow-sm transition-all cursor-pointer active:scale-95"
+            >
+              {word}
+            </button>
+          ))}
+          {contextHistory && (
+            <button
+              type="button"
+              onClick={() => {
+                setContextHistory("");
+                setStudentSaid("");
+                setTranscription("Conversa reiniciada! Clique no microfone e diga qualquer palavra que queira aprender.");
+              }}
+              className="px-3.5 py-1.5 rounded-full text-xs md:text-sm font-bold bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 shadow-sm transition-all cursor-pointer"
+            >
+              🔄 Novo Tema
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Caixa de Transcrição / Resposta da IA */}
-      {transcription && (
+      {(studentSaid || transcription) && (
         <div className={`w-full p-6 rounded-3xl transition-opacity duration-500 ${
           profile === "KIDS" 
             ? "bg-white shadow-xl border-4 border-yellow-300 text-2xl font-bold text-sky-900" 
@@ -343,10 +417,18 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
             ? "bg-white border border-slate-300 text-xl text-slate-800 shadow-sm rounded-xl font-serif"
             : "bg-[#FDFBF7] border-2 border-teal-200 text-xl leading-loose tracking-wider text-slate-800 shadow-sm"
         }`}>
-          <div className="flex items-start gap-4">
-            <Volume2 className={profile === "KIDS" ? "text-yellow-500 w-8 h-8 shrink-0 animate-pulse" : profile === "EJA" ? "text-slate-500 w-6 h-6 shrink-0" : "text-teal-600 w-6 h-6 shrink-0"} />
-            <p className="whitespace-pre-line leading-relaxed">{transcription}</p>
-          </div>
+          {studentSaid && (
+            <div className="mb-3 pb-3 border-b border-black/10 flex items-center gap-2 text-sm md:text-base font-semibold opacity-80">
+              <span>🗣️ Você falou:</span>
+              <span className="italic font-normal">"{studentSaid}"</span>
+            </div>
+          )}
+          {transcription && (
+            <div className="flex items-start gap-4">
+              <Volume2 className={profile === "KIDS" ? "text-yellow-500 w-8 h-8 shrink-0 animate-pulse" : profile === "EJA" ? "text-slate-500 w-6 h-6 shrink-0" : "text-teal-600 w-6 h-6 shrink-0"} />
+              <p className="whitespace-pre-line leading-relaxed">{transcription}</p>
+            </div>
+          )}
         </div>
       )}
     </div>
