@@ -53,6 +53,7 @@ export default function LoginPage() {
           <SignIn
             routing="hash"
             forceRedirectUrl="/onboarding"
+            fallbackRedirectUrl="/onboarding"
             appearance={{
               elements: {
                 rootBox: "w-full",

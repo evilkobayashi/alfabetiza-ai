@@ -10,7 +10,7 @@ _usage: dict[tuple[str, str], int] = defaultdict(int)
 
 def _client() -> jwt.PyJWKClient:
     global _jwks
-    url = os.getenv("CLERK_JWKS_URL")
+    url = os.getenv("CLERK_JWKS_URL") or "https://clerk.aitecnologia.xyz/.well-known/jwks.json"
     if not url:
         raise HTTPException(status_code=503, detail="Autenticação não configurada.")
     if _jwks is None:

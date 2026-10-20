@@ -54,6 +54,7 @@ export default function SignupPage() {
             routing="hash"
             signInUrl="/login"
             forceRedirectUrl="/onboarding"
+            fallbackRedirectUrl="/onboarding"
             appearance={{
               elements: {
                 rootBox: "w-full",
