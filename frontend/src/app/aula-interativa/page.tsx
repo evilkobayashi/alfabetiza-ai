@@ -140,24 +140,51 @@ function normalizePt(str: string): string {
     .trim();
 }
 
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] =
+        a[i - 1] === b[j - 1]
+          ? dp[i - 1][j - 1]
+          : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
 function phoneticMatch(spokenRaw: string, targetRaw: string): boolean {
   const spoken = normalizePt(spokenRaw);
   const target = normalizePt(targetRaw);
   if (!spoken || !target) return false;
-  if (spoken.includes(target) || target.includes(spoken)) return true;
 
-  // Variações fonéticas comuns na fala brasileira (O -> U no final, E -> I no final, plural)
   const phoneticNormalize = (w: string) =>
-    w.replace(/S$/, "").replace(/U$/, "O").replace(/I$/, "E").replace(/LH/g, "LI").replace(/RR/g, "R");
+    w
+      .replace(/S$/, "")
+      .replace(/U$/, "O")
+      .replace(/I$/, "E")
+      .replace(/LH/g, "LI")
+      .replace(/RR/g, "R")
+      .replace(/SS/g, "S")
+      .replace(/C([EI])/g, "S$1");
 
-  const words = spoken.split(/\s+/);
   const normTarget = phoneticNormalize(target);
+  const words = spoken.split(/\s+/).filter(Boolean);
+
+  // Verifica também a junção de sílabas caso o aluno tenha falado pausado (ex: "GA TO" -> "GATO")
+  const joinedSpoken = phoneticNormalize(words.join(""));
+  if (joinedSpoken === normTarget) return true;
+
   for (const w of words) {
     const nw = phoneticNormalize(w);
     if (nw === normTarget) return true;
-    // Se acertou pelo menos a primeira sílaba (3+ letras ou 2 letras em palavras curtas)
-    if (normTarget.length >= 4 && nw.length >= 3 && normTarget.startsWith(nw.slice(0, 3))) return true;
-    if (normTarget.length <= 4 && nw.length >= 2 && normTarget.startsWith(nw.slice(0, 2))) return true;
+    if (normTarget.length >= 4 && nw.length >= 3 && levenshtein(nw, normTarget) <= 1) {
+      return true;
+    }
   }
   return false;
 }
@@ -174,11 +201,11 @@ export default function AulaInterativa() {
   const [teacherMessage, setTeacherMessage] = useState<string>("");
 
   const pageData = LESSON_PAGES[currentPage];
-  const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
-  const interimTranscriptRef = useRef<string>("");
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const rafRef = useRef<number | null>(null);
   const handledRef = useRef<boolean>(false);
 
   const speakText = (text: string, onEnd?: () => void) => {
@@ -213,9 +240,8 @@ export default function AulaInterativa() {
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch {}
-      }
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (audioCtxRef.current) audioCtxRef.current.close().catch(() => {});
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
       }
@@ -251,7 +277,7 @@ export default function AulaInterativa() {
     setStudentSaid(clean || "...");
 
     const target = pageData.targetWord.toUpperCase();
-    const isMatch = phoneticMatch(clean, target) || phoneticMatch(clean, pageData.text);
+    const isMatch = phoneticMatch(clean, target);
 
     if (isMatch) {
       setFeedback("success");
@@ -262,15 +288,19 @@ export default function AulaInterativa() {
     } else {
       setFeedback("retry");
       const heardMsg = clean ? `Eu ouvi "${clean}". ` : "O som ficou baixinho. ";
-      setTeacherMessage(`${heardMsg}Vamos tentar de novo? Fale pausadamente: ${pageData.syllables} (${target}).`);
+      setTeacherMessage(`${heardMsg}Vamos tentar de novo? Fale apenas a palavra destacada: ${target} (${pageData.syllables}).`);
       speakText(`Quase lá! Fale comigo: ${pageData.syllables}. ${target}!`);
     }
   };
 
   const stopAllCapture = () => {
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch {}
-      recognitionRef.current = null;
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       try { mediaRecorderRef.current.stop(); } catch {}
@@ -292,10 +322,11 @@ export default function AulaInterativa() {
 
     setFeedback("none");
     setStudentSaid("");
-    interimTranscriptRef.current = "";
     handledRef.current = false;
 
-    // 1. Inicia gravação MediaRecorder para enviar ao Whisper STT no backend
+    // Pequena pausa para garantir que o áudio do professor parou de sair na caixa de som
+    await new Promise((r) => setTimeout(r, 150));
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -324,16 +355,10 @@ export default function AulaInterativa() {
         }
         if (handledRef.current) return;
 
-        // Se o navegador já capturou a palavra certa via Web Speech API, usa imediatamente
-        if (interimTranscriptRef.current && phoneticMatch(interimTranscriptRef.current, pageData.targetWord)) {
-          handleSpeechResult(interimTranscriptRef.current);
-          return;
-        }
-
         const actualMime = chosenMime.split(";")[0].trim() || "audio/webm";
         const blob = new Blob(audioChunksRef.current, { type: actualMime });
         if (blob.size < 350) {
-          handleSpeechResult(interimTranscriptRef.current || "");
+          handleSpeechResult("");
           return;
         }
 
@@ -344,7 +369,7 @@ export default function AulaInterativa() {
           const formData = new FormData();
           const ext = actualMime.includes("mp4") ? "mp4" : actualMime.includes("ogg") ? "ogg" : "webm";
           formData.append("audio_file", blob, `lesson.${ext}`);
-          formData.append("target_hint", `${pageData.targetWord}, ${pageData.text}`);
+          formData.append("target_hint", pageData.targetWord);
 
           const res = await fetch(`${API_URL}/api/voice/transcribe`, {
             method: "POST",
@@ -354,50 +379,62 @@ export default function AulaInterativa() {
 
           if (res.ok) {
             const data = await res.json();
-            if (data.text) {
-              handleSpeechResult(data.text);
-              return;
-            }
+            handleSpeechResult(data.text || "");
+            return;
           }
         } catch (err) {
-          console.warn("Fallback local SpeechRecognition:", err);
+          console.warn("Erro na transcrição:", err);
         }
 
-        handleSpeechResult(interimTranscriptRef.current || "");
+        handleSpeechResult("");
       };
 
       mr.start();
       setIsRecording(true);
+
+      // VAD: Detecta início da fala e encerra automaticamente após 1.4s de silêncio pós-fala
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioCtxRef.current = audioCtx;
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      let hasSpoken = false;
+      let silenceStart: number | null = null;
+      const recordStart = Date.now();
+
+      const checkLevel = () => {
+        if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") return;
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        const avg = sum / dataArray.length;
+
+        if (avg > 16) {
+          hasSpoken = true;
+          silenceStart = null;
+        } else if (hasSpoken) {
+          if (!silenceStart) silenceStart = Date.now();
+          if (Date.now() - silenceStart > 1400) {
+            setIsRecording(false);
+            setIsProcessing(true);
+            stopAllCapture();
+            return;
+          }
+        } else if (Date.now() - recordStart > 8000) {
+          setIsRecording(false);
+          setIsProcessing(true);
+          stopAllCapture();
+          return;
+        }
+        rafRef.current = requestAnimationFrame(checkLevel);
+      };
+      checkLevel();
     } catch (err) {
       console.error("Erro ao acessar microfone:", err);
       alert("Permissão de microfone necessária para praticar a leitura!");
-      return;
-    }
-
-    // 2. Em paralelo, ativa SpeechRecognition nativo do navegador para detecção instantânea
-    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRec) {
-      try {
-        const recognition = new SpeechRec();
-        recognition.lang = "pt-BR";
-        recognition.continuous = true;
-        recognition.interimResults = true;
-
-        recognition.onresult = (event: any) => {
-          let combined = "";
-          for (let i = 0; i < event.results.length; i++) {
-            combined += event.results[i][0].transcript + " ";
-          }
-          interimTranscriptRef.current = combined.trim();
-          if (phoneticMatch(interimTranscriptRef.current, pageData.targetWord)) {
-            stopAllCapture();
-            handleSpeechResult(interimTranscriptRef.current);
-          }
-        };
-
-        recognitionRef.current = recognition;
-        recognition.start();
-      } catch {}
     }
   };
 

@@ -134,7 +134,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
         for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
         const average = sum / dataArray.length;
 
-        if (average > 14) {
+        if (average > 15) {
           // Voz detectada
           hasSpokenRef.current = true;
           silenceStartRef.current = null;
@@ -142,17 +142,15 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
           // Silêncio
           if (!silenceStartRef.current) silenceStartRef.current = Date.now();
           
-          if (isHandsFreeRef.current) {
-            // Se já falou e agora silenciou por 1.8s -> envia
-            if (hasSpokenRef.current && Date.now() - silenceStartRef.current > 1800) {
-              stopRecording();
-              return;
-            }
-            // Se ainda nem falou após 7s de silêncio -> para para não prender
-            if (!hasSpokenRef.current && Date.now() - silenceStartRef.current > 7000) {
-              stopRecording();
-              return;
-            }
+          // Se já falou e agora silenciou por 1.6s -> encerra e envia sem gravar ruído residual
+          if (hasSpokenRef.current && Date.now() - silenceStartRef.current > 1600) {
+            stopRecording();
+            return;
+          }
+          // No modo mãos livres, se ainda nem falou após 7s de silêncio -> para para não prender
+          if (isHandsFreeRef.current && !hasSpokenRef.current && Date.now() - silenceStartRef.current > 7000) {
+            stopRecording();
+            return;
           }
         }
         rafRef.current = requestAnimationFrame(checkAudioLevel);
@@ -169,7 +167,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
   };
 
   const stopRecording = () => {
-    if (!mediaRecorderRef.current || !isRecording) return;
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") return;
 
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
@@ -188,9 +186,7 @@ export default function VoiceRecorder({ profile, animationsEnabled = true }: Voi
     setIsRecording(false);
 
     try {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-        mediaRecorderRef.current.stop();
-      }
+      mediaRecorderRef.current.stop();
     } catch {}
   };
 

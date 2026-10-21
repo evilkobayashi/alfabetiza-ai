@@ -50,6 +50,31 @@ VOICE_PROFILES = {
     "PCD": "pt-BR-FranciscaNeural"   # Pode ser a mesma, mas com tom calmo
 }
 
+WHISPER_HALLUCINATIONS = {
+    "obrigado",
+    "obrigado.",
+    "obrigado por assistir",
+    "obrigado por assistir.",
+    "legendas pela comunidade amara.org",
+    "amara.org",
+    "inscreva-se",
+    "inscreva-se no canal",
+    "até a próxima",
+    "tchau",
+    "...",
+    ".",
+}
+
+
+def _clean_whisper_text(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if text.lower().rstrip(".!,?") in WHISPER_HALLUCINATIONS:
+        return ""
+    return text
+
+
 async def process_audio_interaction(
     audio_bytes: bytes, 
     mime_type: str, 
@@ -57,29 +82,23 @@ async def process_audio_interaction(
     last_ai_response: str = ""
 ) -> tuple[str, bytes, str]:
     """
-    1. STT com Whisper (via Groq API para latência AAA).
-    2. LLM com Gemini para raciocínio pedagógico em cima da transcrição.
+    1. STT auxiliar com Whisper (sem prompt enviesado) + Áudio Nativo direto no Gemini.
+    2. LLM com Gemini ouvindo o áudio real para máxima precisão fonética e pedagógica.
     3. TTS com Edge Neural.
     """
     logger.info(f"Processando áudio para o perfil: {profile}")
 
-    # ===== ETAPA 1: STT com Whisper (ou Fallback para Gemini) =====
+    # ===== ETAPA 1: STT auxiliar com Whisper (sem prompt para evitar alucinações) =====
     groq_key = os.getenv("GROQ_API_KEY")
-    texto_aluno = ""
-    usar_fallback_multimodal = False
+    texto_whisper = ""
     
-    if not groq_key:
-        usar_fallback_multimodal = True
-    else:
+    if groq_key:
         groq_client = Groq(api_key=groq_key)
         ext = mime_type.split("/")[-1].split(";")[0] if "/" in mime_type else "webm"
-        if not ext or ext == "octet-stream": ext = "webm"
-        filename = f"audio.{ext}"
-        file_tuple = (filename, audio_bytes, mime_type)
-        
-        # 1. Tenta whisper-large-v3-turbo (muito mais rápido e não inventa alucinações de instruções)
+        if not ext or ext == "octet-stream":
+            ext = "webm"
+        file_tuple = (f"audio.{ext}", audio_bytes, mime_type)
         whisper_model = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
-        prompt_vocab = "Alfabetização em português: vogais, consoantes, sílabas e palavras simples faladas por crianças e adultos: ba, be, bi, bo, bu, bola, pato, gato, casa."
         try:
             transcription_obj = groq_client.audio.transcriptions.create(
                 file=file_tuple,
@@ -87,37 +106,13 @@ async def process_audio_interaction(
                 response_format="json",
                 language="pt",
                 temperature=0.0,
-                prompt=prompt_vocab
             )
-            texto_aluno = (transcription_obj.text or "").strip()
-            logger.info(f"🗣️ STT Whisper ({whisper_model}) ouviu: '{texto_aluno}'")
+            texto_whisper = _clean_whisper_text(transcription_obj.text)
+            logger.info(f"🗣️ STT Whisper ({whisper_model}) ouviu: '{texto_whisper}'")
         except Exception as stt_err:
-            logger.warning(f"Whisper {whisper_model} falhou ({stt_err}), tentando whisper-large-v3...")
-            try:
-                transcription_obj = groq_client.audio.transcriptions.create(
-                    file=file_tuple,
-                    model="whisper-large-v3",
-                    response_format="json",
-                    language="pt",
-                    temperature=0.0,
-                    prompt=prompt_vocab
-                )
-                texto_aluno = (transcription_obj.text or "").strip()
-                logger.info(f"🗣️ STT Whisper v3 ouviu: '{texto_aluno}'")
-            except Exception as stt_err2:
-                logger.error(f"Erro no Whisper STT, ativando Fallback Multimodal Gemini: {stt_err2}")
-                usar_fallback_multimodal = True
+            logger.warning(f"Whisper {whisper_model} falhou ({stt_err})")
 
-    if not usar_fallback_multimodal and not texto_aluno:
-        return "Não consegui ouvir nenhuma palavra. Fale bem pertinho do microfone e tente de novo!", b"", ""
-        
-    # Anonimização LGPD/ECA (remove números longos e emails do texto do aluno antes de ir para IA)
-    import re
-    if texto_aluno:
-        texto_aluno = re.sub(r'\b\d{4,}\b', '[DADO_PROTEGIDO]', texto_aluno)
-        texto_aluno = re.sub(r'\S+@\S+', '[DADO_PROTEGIDO]', texto_aluno)
-
-    # ===== ETAPA 2: LLM (Cérebro Pedagógico) com Gemini =====
+    # ===== ETAPA 2: Áudio Nativo + Cérebro Pedagógico com Gemini =====
     gemini_key = os.getenv("GEMINI_API_KEY")
     if not gemini_key:
         raise ValueError("GEMINI_API_KEY não configurada.")
@@ -129,39 +124,26 @@ async def process_audio_interaction(
     contexto_str = ""
     if last_ai_response:
         contexto_str = f"HISTÓRICO RECENTE DA CONVERSA:\n{last_ai_response}\n\n"
-        
-    contents = []
-    if usar_fallback_multimodal:
-        # Fallback: Envia o áudio direto pro Gemini transcrever e responder
-        contents.append(
-            genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
-        )
-        user_prompt = (
+
+    dica_whisper = f"\n(Transcrição auxiliar preliminar: \"{texto_whisper}\")" if texto_whisper else ""
+
+    contents = [
+        genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+        (
             f"{contexto_str}"
-            "O áudio anexado contém a fala de um aluno.\n"
-            "Responda EXATAMENTE no seguinte formato de duas linhas:\n"
-            "ALUNO: [o que você ouviu o aluno falar no áudio]\n"
-            "RESPOSTA: [sua resposta pedagógica curta, falada, em 2 a 3 frases limpas, sem markdown nem emojis]\n\n"
-            "Instruções:\n"
-            "- Se o aluno repetiu ou tentou falar a sílaba/palavra que você pediu no histórico recente: elogie com alegria e avance para o próximo pedacinho ou uma nova palavra!\n"
-            "- Se falou uma palavra nova: ensine o que significa e separe as sílabas com pausas.\n"
-            "- Se não entendeu ou ficou silencioso: peça com carinho para falar de novo."
-        )
-        contents.append(user_prompt)
-    else:
-        user_prompt = (
-            f"{contexto_str}"
-            f"Transcrição do Microfone (O aluno acabou de falar): \"{texto_aluno}\"\n\n"
+            f"Ouça com muita atenção o áudio anexado do aluno.{dica_whisper}\n\n"
+            "Responda OBRIGATORIAMENTE no formato exato de duas linhas abaixo:\n"
+            "ALUNO: [transcreva exatamente as palavras ou sílabas que o aluno falou no áudio, sem inventar frases. Se houver apenas silêncio ou ruído, escreva VAZIO]\n"
+            "RESPOSTA: [sua resposta pedagógica curta, falada, de 2 a 3 frases, sem markdown, sem asteriscos e sem emojis]\n\n"
             "Instruções Pedagógicas:\n"
-            "1. Avalie a fala do aluno em relação ao histórico recente da conversa.\n"
-            "2. Se ele repetiu ou tentou falar a sílaba/palavra que você pediu: ELOGIE com alegria e AVANCE para a próxima sílaba ou para uma nova palavra. NUNCA repita a mesma pergunta ou explicação!\n"
-            "3. Se ele falou uma nova palavra ou fez uma pergunta: responda com carinho, ensine o significado e separe as sílabas (ex: BO-LA).\n"
-            "4. Mantenha a resposta curta (2 a 4 frases), clara e falada, sem emojis ou asteriscos."
-        )
-        contents.append(user_prompt)
+            "1. Confie no que você OUVIU no áudio (se a transcrição auxiliar estiver errada ou sem sentido, ignore-a e use o áudio real).\n"
+            "2. Se o aluno repetiu ou tentou falar a sílaba/palavra pedida no histórico: ELOGIE com alegria e AVANCE para a próxima sílaba ou para uma nova palavra.\n"
+            "3. Se ele falou uma palavra nova ou fez uma pergunta: ensine o significado de forma simples e separe as sílabas (ex: BO-LA).\n"
+            "4. Se o áudio for VAZIO ou inaudível: peça com carinho para ele falar um pouquinho mais alto perto do microfone."
+        ),
+    ]
 
     response = None
-    # Tentativa com modelo principal e fallbacks graduais
     for m in [model_name, "gemini-2.0-flash", "gemini-1.5-flash"]:
         try:
             response = gemini_client.models.generate_content(
@@ -169,7 +151,7 @@ async def process_audio_interaction(
                 contents=contents,
                 config=genai.types.GenerateContentConfig(
                     system_instruction=sys_prompt,
-                    temperature=0.3,
+                    temperature=0.2,
                 )
             )
             if response and response.text:
@@ -180,22 +162,29 @@ async def process_audio_interaction(
     if not response or not response.text:
         raise RuntimeError("Não foi possível obter resposta dos modelos Gemini disponíveis.")
 
-    resposta_texto = response.text.strip()
-    
-    # Se estava no modo multimodal, desmembra a transcrição da resposta pedagógica
-    if usar_fallback_multimodal and "RESPOSTA:" in resposta_texto:
-        parts = resposta_texto.split("RESPOSTA:", 1)
-        aluno_raw = parts[0].replace("ALUNO:", "").strip()
-        if aluno_raw:
-            texto_aluno = aluno_raw
+    resposta_bruta = response.text.strip()
+    texto_aluno = texto_whisper
+    resposta_texto = resposta_bruta
+
+    if "RESPOSTA:" in resposta_bruta:
+        parts = resposta_bruta.split("RESPOSTA:", 1)
+        aluno_raw = parts[0].replace("ALUNO:", "").strip().strip('"').strip("'")
         resposta_texto = parts[1].strip()
-    
-    logger.info(f"🧠 Resposta IA (Gemini): {resposta_texto}")
+        if aluno_raw and aluno_raw.upper() != "VAZIO":
+            texto_aluno = aluno_raw
+        elif aluno_raw.upper() == "VAZIO" and not texto_whisper:
+            texto_aluno = ""
+
+    # Anonimização LGPD/ECA
+    import re
+    if texto_aluno:
+        texto_aluno = re.sub(r'\b\d{4,}\b', '[DADO_PROTEGIDO]', texto_aluno)
+        texto_aluno = re.sub(r'\S+@\S+', '[DADO_PROTEGIDO]', texto_aluno)
+
+    logger.info(f"🎯 Aluno falou: '{texto_aluno}' | 🧠 Resposta IA: {resposta_texto}")
     
     # ===== ETAPA 3: TTS (Text-to-Speech) com Edge Neural =====
     voice_name = VOICE_PROFILES.get(profile, "pt-BR-FranciscaNeural")
-    
-    # Remove marcações markdown (*, _, #) para não serem lidas em voz alta
     texto_para_voz = resposta_texto.replace("*", "").replace("#", "").replace("_", "")
     
     try:
@@ -211,24 +200,47 @@ async def process_audio_interaction(
         logger.warning(f"Falha ao gerar áudio TTS com Edge Neural, enviando resposta apenas em texto: {tts_err}")
         audio_out_bytes = b""
     
-    texto_detectado = texto_aluno if texto_aluno else "[Áudio Identificado]"
-    return resposta_texto, audio_out_bytes, texto_detectado
+    return resposta_texto, audio_out_bytes, texto_aluno
 
 
 async def transcribe_audio_only(audio_bytes: bytes, mime_type: str, target_hint: str = "") -> str:
-    """Transcreve áudio usando Groq Whisper (com fallback multimodal Gemini) para lições interativas."""
+    """Transcreve áudio curto com precisão usando Áudio Nativo Gemini + fallback Whisper sem prompt alucinatório."""
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if gemini_key:
+        gemini_client = genai.Client(api_key=gemini_key)
+        for m in ["gemini-2.0-flash", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"), "gemini-1.5-flash"]:
+            try:
+                res = gemini_client.models.generate_content(
+                    model=m,
+                    contents=[
+                        genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                        (
+                            "Ouça o áudio e transcreva EXATAMENTE o que a pessoa falou em português brasileiro.\n"
+                            "Regras:\n"
+                            "- Retorne APENAS as palavras ou sílabas faladas, sem pontuação final e sem explicações.\n"
+                            "- Não invente frases que não estão no áudio.\n"
+                            "- Se houver apenas silêncio ou ruído sem fala inteligível, retorne exatamente: VAZIO"
+                        ),
+                    ],
+                    config=genai.types.GenerateContentConfig(temperature=0.0),
+                )
+                if res and res.text:
+                    cleaned = res.text.strip().strip('"').strip("'").rstrip(".!,?")
+                    if cleaned.upper() == "VAZIO":
+                        return ""
+                    if cleaned:
+                        logger.info(f"🎯 STT Gemini Audio ({m}) ouviu: '{cleaned}'")
+                        return cleaned
+            except Exception as err:
+                logger.warning(f"Falha no STT Gemini ({m}): {err}")
+
     groq_key = os.getenv("GROQ_API_KEY")
-    ext = mime_type.split("/")[-1].split(";")[0] if "/" in mime_type else "webm"
-    if not ext or ext == "octet-stream":
-        ext = "webm"
-    file_tuple = (f"audio.{ext}", audio_bytes, mime_type)
-
-    vocab_prompt = "Alfabetização em português: vogais, sílabas e palavras simples."
-    if target_hint:
-        vocab_prompt = f"Alfabetização em português. Palavras do exercício: {target_hint}."
-
     if groq_key:
         groq_client = Groq(api_key=groq_key)
+        ext = mime_type.split("/")[-1].split(";")[0] if "/" in mime_type else "webm"
+        if not ext or ext == "octet-stream":
+            ext = "webm"
+        file_tuple = (f"audio.{ext}", audio_bytes, mime_type)
         for model in [os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo"), "whisper-large-v3"]:
             try:
                 res = groq_client.audio.transcriptions.create(
@@ -237,29 +249,12 @@ async def transcribe_audio_only(audio_bytes: bytes, mime_type: str, target_hint:
                     response_format="json",
                     language="pt",
                     temperature=0.0,
-                    prompt=vocab_prompt,
                 )
-                text = (res.text or "").strip()
+                text = _clean_whisper_text(res.text)
                 if text:
+                    logger.info(f"🗣️ STT Whisper ({model}) ouviu: '{text}'")
                     return text
             except Exception as err:
                 logger.warning(f"Falha no STT ({model}): {err}")
-
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if gemini_key:
-        gemini_client = genai.Client(api_key=gemini_key)
-        for m in [os.getenv("GEMINI_MODEL", "gemini-2.5-flash"), "gemini-2.0-flash", "gemini-1.5-flash"]:
-            try:
-                res = gemini_client.models.generate_content(
-                    model=m,
-                    contents=[
-                        genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-                        "Transcreva exatamente o que foi falado neste áudio em português. Retorne APENAS as palavras ouvidas, sem explicações ou pontuação extra.",
-                    ],
-                )
-                if res and res.text:
-                    return res.text.strip()
-            except Exception as err:
-                logger.warning(f"Falha no STT Gemini ({m}): {err}")
 
     return ""
