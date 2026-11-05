@@ -6,12 +6,15 @@ const ASAAS_URL = process.env.ASAAS_URL || 'https://api.asaas.com/v3'
 
 export async function POST(req: Request) {
   try {
+    const asaasKey = (process.env.ASAAS_API_KEY || '').trim().replace(/^["']|["']$/g, '')
+    const asaasUrl = (process.env.ASAAS_URL || 'https://api.asaas.com/v3').trim()
+
     const { userId } = await auth()
     if (!userId) {
       return NextResponse.json({ error: 'Faça login para assinar.' }, { status: 401 })
     }
 
-    if (!ASAAS_API_KEY) {
+    if (!asaasKey) {
       return NextResponse.json({ error: 'Gateway de pagamento não configurado no servidor.' }, { status: 500 })
     }
 
@@ -34,13 +37,13 @@ export async function POST(req: Request) {
       : 'Alfabetiza AÍ - Plano Família Mensal (Voz Ilimitada)'
 
     const headers = {
-      access_token: ASAAS_API_KEY,
+      access_token: asaasKey,
       'Content-Type': 'application/json',
     }
 
     // 1. Buscar cliente existente pelo CPF/CNPJ ou criar novo no Asaas
     let customerId: string | null = null
-    const searchRes = await fetch(`${ASAAS_URL}/customers?cpfCnpj=${cpfCnpjRaw}`, { headers })
+    const searchRes = await fetch(`${asaasUrl}/customers?cpfCnpj=${cpfCnpjRaw}`, { headers })
     if (searchRes.ok) {
       const searchData = await searchRes.json().catch(() => ({}))
       if (searchData?.data?.length > 0) {
@@ -49,7 +52,7 @@ export async function POST(req: Request) {
     }
 
     if (!customerId) {
-      const custRes = await fetch(`${ASAAS_URL}/customers`, {
+      const custRes = await fetch(`${asaasUrl}/customers`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ name, email, cpfCnpj: cpfCnpjRaw }),
@@ -70,7 +73,7 @@ export async function POST(req: Request) {
     tomorrow.setDate(tomorrow.getDate() + 1)
     const dueDate = tomorrow.toISOString().split('T')[0]
 
-    const payRes = await fetch(`${ASAAS_URL}/payments`, {
+    const payRes = await fetch(`${asaasUrl}/payments`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -96,7 +99,7 @@ export async function POST(req: Request) {
     // 3. Obter QR Code PIX imediato
     let qrCode: string | null = null
     let payload: string | null = null
-    const qrRes = await fetch(`${ASAAS_URL}/payments/${paymentId}/pixQrCode`, { headers })
+    const qrRes = await fetch(`${asaasUrl}/payments/${paymentId}/pixQrCode`, { headers })
     if (qrRes.ok) {
       const qrData = await qrRes.json().catch(() => ({}))
       qrCode = qrData.encodedImage || null

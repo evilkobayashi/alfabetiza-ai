@@ -7,6 +7,9 @@ const ASAAS_URL = process.env.ASAAS_URL || 'https://api.asaas.com/v3'
 
 export async function GET(req: Request) {
   try {
+    const asaasKey = (process.env.ASAAS_API_KEY || '').trim().replace(/^["']|["']$/g, '')
+    const asaasUrl = (process.env.ASAAS_URL || 'https://api.asaas.com/v3').trim()
+
     const { userId } = await auth()
     if (!userId) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
@@ -14,13 +17,13 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url)
     const paymentId = searchParams.get('id')
-    if (!paymentId || !ASAAS_API_KEY) {
+    if (!paymentId || !asaasKey) {
       return NextResponse.json({ confirmed: false, status: 'PENDING' })
     }
 
-    const res = await fetch(`${ASAAS_URL}/payments/${encodeURIComponent(paymentId)}`, {
+    const res = await fetch(`${asaasUrl}/payments/${encodeURIComponent(paymentId)}`, {
       headers: {
-        access_token: ASAAS_API_KEY,
+        access_token: asaasKey,
         'Content-Type': 'application/json',
       },
       cache: 'no-store',
