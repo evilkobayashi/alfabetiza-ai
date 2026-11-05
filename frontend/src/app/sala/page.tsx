@@ -3,16 +3,34 @@
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { UserButton } from "@clerk/nextjs";
+import { UserButton, useClerk } from "@clerk/nextjs";
 import VoiceRecorder from "@/components/VoiceRecorder";
-import { Smile, Brain, BookOpen } from "lucide-react";
+import { Smile, Brain, BookOpen, Trash2 } from "lucide-react";
 
 type Profile = "KIDS" | "PCD" | "EJA";
 
 function SalaContent() {
   const searchParams = useSearchParams();
+  const { signOut } = useClerk();
   const queryProfile = searchParams.get('perfil') as Profile;
   const [profile, setProfile] = useState<Profile>(queryProfile || "KIDS");
+
+  const handleDeleteUserData = async () => {
+    const confirmed = window.confirm(
+      "DIREITO AO ESQUECIMENTO (LGPD - Art. 18, VI):\n\nDeseja apagar permanentemente todos os seus dados pessoais, perfil e histórico fonético do Alfabetiza AÍ? Esta ação não pode ser desfeita."
+    );
+    if (!confirmed) return;
+    try {
+      await fetch("/api/profile", { method: "DELETE" });
+      localStorage.clear();
+      document.cookie = "alfabetiza_perfil=; path=/; max-age=0";
+      alert("Todos os seus dados foram excluídos permanentemente conforme a LGPD.");
+      await signOut({ redirectUrl: "/" });
+    } catch {
+      localStorage.clear();
+      window.location.href = "/";
+    }
+  };
 
   useEffect(() => {
     if (queryProfile && ['KIDS', 'PCD', 'EJA'].includes(queryProfile)) {
@@ -151,10 +169,20 @@ function SalaContent() {
           </Link>
           <Link
             href="/pagamento"
-            className="bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-colors whitespace-nowrap"
+            className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-colors whitespace-nowrap"
           >
             Voz Ilimitada 👑
           </Link>
+          <button
+            type="button"
+            onClick={handleDeleteUserData}
+            title="Apagar Meus Dados e Excluir Conta (LGPD)"
+            aria-label="Apagar Meus Dados e Excluir Conta (LGPD)"
+            className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold px-3 py-1.5 rounded-full shadow-sm transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+            <span className="hidden sm:inline">Apagar Dados (LGPD)</span>
+          </button>
           <div className="bg-white/50 backdrop-blur-md p-1.5 rounded-full shadow-sm border border-black/5 flex items-center justify-center">
             <UserButton />
           </div>

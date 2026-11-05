@@ -9,11 +9,11 @@ export default function LoginPage() {
     <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-[#FAF9F6] font-sans text-slate-800">
       {/* LEFT */}
       <div className="hidden lg:flex lg:col-span-5 relative bg-blue-950 p-12 flex-col justify-between overflow-hidden">
-        {/* Imagem de Fundo (Opcional, com overlay escuro) */}
+        {/* Imagem de Fundo (Licença Aberta Verificada) */}
         <div className="absolute inset-0 opacity-20 mix-blend-overlay">
           <img 
             src="https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop" 
-            alt="Fundo escola"
+            alt="Mesa escolar com letras do alfabeto ilustrando o ambiente de alfabetização (Licença Aberta Unsplash)"
             className="w-full h-full object-cover grayscale"
           />
         </div>
@@ -42,10 +42,13 @@ export default function LoginPage() {
       </div>
 
       {/* RIGHT */}
-      <div className="lg:col-span-7 flex flex-col justify-between p-6 sm:p-12">
+      <div id="main-content" className="lg:col-span-7 flex flex-col justify-between p-6 sm:p-12">
         <div className="flex items-center justify-between mb-8">
-          <Link href="/" className="inline-flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-blue-900 transition-colors">
-            <ArrowLeft className="w-4 h-4" /> Voltar para o início
+          <Link href="/" className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-blue-900 transition-colors">
+            <ArrowLeft className="w-4 h-4" aria-hidden="true" /> Voltar para o início
+          </Link>
+          <Link href="/signup" className="text-sm font-bold text-blue-900 underline hover:text-blue-700">
+            Criar conta (com termo parental LGPD)
           </Link>
         </div>
 

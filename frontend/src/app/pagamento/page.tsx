@@ -136,6 +136,9 @@ export default function PagamentoPage() {
               >
                 {loading ? 'Gerando PIX...' : `Assinar por R$ ${cycle === 'YEARLY' ? '147,00 (Anual)' : '24,90 (Mensal)'}`}
               </button>
+              <p className="mt-4 text-xs text-slate-600 text-center">
+                ✓ Preço final em Reais (R$) com todos os impostos inclusos · Zero taxas escondidas no PIX · Garantia incondicional de 7 dias (<Link href="/reembolso" className="text-amber-800 underline font-semibold">Política de Reembolso CDC</Link>).
+              </p>
             </>
           ) : (
             <div className="text-center">

@@ -11,7 +11,7 @@ const fadeIn = {
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#FAF9F6] text-slate-800 font-sans selection:bg-amber-200">
+    <div id="main-content" className="min-h-screen bg-[#FAF9F6] text-slate-800 font-sans selection:bg-amber-200">
       
       {/* NAVBAR */}
       <header className="sticky top-0 z-50 w-full border-b border-slate-200/50 bg-[#FAF9F6]/90 backdrop-blur-md">
@@ -93,10 +93,13 @@ export default function LandingPage() {
             <div className="aspect-[4/5] rounded-3xl overflow-hidden bg-slate-200 relative">
               <img 
                 src="https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop" 
-                alt="Criança aprendendo"
+                alt="Ambiente escolar de alfabetização com letras educativas sobre mesa de madeira (Fotografia sob Licença Aberta Unsplash)"
                 className="object-cover w-full h-full opacity-90"
               />
               <div className="absolute inset-0 bg-blue-900/10 mix-blend-multiply"></div>
+              <span className="absolute bottom-2 right-3 bg-slate-900/75 text-white text-[10px] px-2 py-0.5 rounded">
+                Imagem: Licença Aberta Verificada (Unsplash License)
+              </span>
             </div>
             
             {/* Card flutuante para dar aquele ar de "produto real" */}
@@ -178,30 +181,43 @@ export default function LandingPage() {
               </Link>
             </div>
           </div>
+          <p className="mx-auto mt-6 max-w-2xl text-center text-xs font-semibold text-slate-600">
+            ✓ Preços finais em Reais (R$) com todos os impostos inclusos · Zero taxas escondidas no PIX · Garantia incondicional de 7 dias com reembolso de 100% (Art. 49 do CDC) · Cancelamento livre a qualquer momento.
+          </p>
         </div>
       </section>
 
       {/* FOOTER */}
-      <footer className="bg-[#FAF9F6] py-12">
-        <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="flex flex-col md:flex-row items-center gap-6">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center text-white">
-                <BookOpen className="w-4 h-4" />
-              </div>
-              <span className="font-serif font-bold text-blue-950 text-xl">Alfabetiza<span className="text-amber-600">AÍ</span></span>
+      <footer className="bg-[#FAF9F6] py-12 border-t border-slate-200">
+        <div className="max-w-6xl mx-auto px-6 flex flex-col items-center text-center gap-4">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center text-white">
+              <BookOpen className="w-4 h-4" aria-hidden="true" />
             </div>
-            <div className="flex items-center gap-4 text-sm font-medium text-slate-500">
-              <Link href="/termos" className="hover:text-blue-900 transition-colors">Termos de Uso</Link>
-              <Link href="/privacidade" className="hover:text-blue-900 transition-colors">Privacidade</Link>
-            </div>
+            <span className="font-serif font-bold text-blue-950 text-xl">Alfabetiza<span className="text-amber-600">AÍ</span></span>
           </div>
-          <p className="text-slate-500 text-sm font-medium">© {new Date().getFullYear()} AÍ Tecnologia e Educação. Todos os direitos reservados.</p>
+          <p className="text-slate-700 text-sm font-bold">
+            © {new Date().getFullYear()} Aí Tecnologia e Educação Inova Simples (I.S.) / Aí Tecnologia e Educação Ltda. — Todos os direitos reservados.
+          </p>
+          <p className="text-xs text-slate-600">
+            Sede: Queimados - RJ, Brasil · Suporte e Encarregado de Dados (DPO): <a href="mailto:contato@aitecnologia.xyz" className="underline font-semibold text-blue-900">contato@aitecnologia.xyz</a> · Programas registrados no INPI.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-4 text-xs font-semibold text-slate-700">
+            <Link href="/termos" className="hover:text-blue-900 underline-offset-4 hover:underline">Termos de Serviço</Link>
+            <Link href="/privacidade" className="hover:text-blue-900 underline-offset-4 hover:underline">Política de Privacidade (LGPD)</Link>
+            <Link href="/reembolso" className="hover:text-blue-900 underline-offset-4 hover:underline">Política de Reembolso (7 Dias CDC)</Link>
+            <Link href="/cookies" className="hover:text-blue-900 underline-offset-4 hover:underline">Política de Cookies e Auditoria de SDKs</Link>
+            <Link href="/unsubscribe" className="hover:text-blue-900 underline-offset-4 hover:underline">Cancelar E-mails (Unsubscribe)</Link>
+            <Link href="/sala" className="text-red-700 hover:text-red-900 underline-offset-4 hover:underline">Apagar Meus Dados (LGPD)</Link>
+          </div>
+          <p className="text-[11px] text-slate-600 max-w-2xl">
+            Licenciamento de Ativos: Ícones sob Licença MIT (Lucide Icons), ilustrações autorais Aí Tecnologia e fotografia de apoio sob Licença Aberta Verificada (Unsplash License). Banco de dados em São Paulo, Brasil (sa-east-1).
+          </p>
         </div>
       </footer>
 
 {/* Disclaimer CDC */}
-<div className="w-full bg-gray-900 text-gray-400 py-6 text-center text-xs px-4">
+<div className="w-full bg-gray-900 text-gray-200 py-6 text-center text-xs px-4">
   <p className="max-w-4xl mx-auto">
     Aviso Legal: Esta plataforma é uma ferramenta de <strong>assistência pedagógica baseada em Inteligência Artificial</strong>. 
     Não garantimos resultados acadêmicos absolutos, notas ou aprovação automática. O uso das ferramentas requer supervisão 

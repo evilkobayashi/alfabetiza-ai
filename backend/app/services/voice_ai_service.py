@@ -75,6 +75,52 @@ def _clean_whisper_text(raw: str) -> str:
     return text
 
 
+def _chamar_sabia_alfabetiza(texto_aluno: str, sys_prompt: str, last_ai_response: str, sabia_key: str) -> str:
+    """
+    Gera a resposta pedagógica de alfabetização usando a LLM brasileira Sabiá-3 (Maritaca AI — Brasil),
+    garantindo soberania de dados (LGPD) e domínio nativo da fonética da Língua Portuguesa.
+    """
+    import urllib.request
+    import json
+
+    base_url = os.getenv("SABIA_BASE_URL", "https://chat.maritaca.ai/api").rstrip("/")
+    model = os.getenv("SABIA_MODEL", "sabia-4")
+    if model in ("sabia-3", "sabia-3.1"):
+        model = "sabia-4"
+    elif model == "sabiazinho-3":
+        model = "sabiazinho-4"
+    url = f"{base_url}/chat/completions"
+
+    contexto_str = f"HISTÓRICO RECENTE DA CONVERSA:\n{last_ai_response}\n\n" if last_ai_response else ""
+    user_msg = (
+        f"{contexto_str}"
+        f"O aluno falou no microfone: \"{texto_aluno or 'VAZIO'}\"\n\n"
+        "Responda com sua fala pedagógica curta (2 a 3 frases simples, sem markdown, sem asteriscos e sem emojis)."
+    )
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_msg},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 350,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {sabia_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "AiTecnologia/2.1",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        result = json.loads(resp.read().decode("utf-8"))
+        return result["choices"][0]["message"]["content"].strip()
+
+
 async def process_audio_interaction(
     audio_bytes: bytes, 
     mime_type: str, 
@@ -112,57 +158,70 @@ async def process_audio_interaction(
         except Exception as stt_err:
             logger.warning(f"Whisper {whisper_model} falhou ({stt_err})")
 
-    # ===== ETAPA 2: Áudio Nativo + Cérebro Pedagógico com Gemini =====
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_key:
-        raise ValueError("GEMINI_API_KEY não configurada.")
-        
-    gemini_client = genai.Client(api_key=gemini_key)
+    # ===== ETAPA 2: Cérebro Pedagógico Prioritário Sabiá-3 (Brasil) + Fallback Áudio Nativo Gemini =====
     sys_prompt = SYSTEM_PROMPTS.get(profile, SYSTEM_PROMPTS["KIDS"])
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    
-    contexto_str = ""
-    if last_ai_response:
-        contexto_str = f"HISTÓRICO RECENTE DA CONVERSA:\n{last_ai_response}\n\n"
+    sabia_key = (os.getenv("MARITACA_API_KEY") or os.getenv("SABIA_API_KEY") or "").strip()
+    resposta_bruta = ""
 
-    dica_whisper = f"\n(Transcrição auxiliar preliminar: \"{texto_whisper}\")" if texto_whisper else ""
-
-    contents = [
-        genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-        (
-            f"{contexto_str}"
-            f"Ouça com muita atenção o áudio anexado do aluno.{dica_whisper}\n\n"
-            "Responda OBRIGATORIAMENTE no formato exato de duas linhas abaixo:\n"
-            "ALUNO: [transcreva exatamente as palavras ou sílabas que o aluno falou no áudio, sem inventar frases. Se houver apenas silêncio ou ruído, escreva VAZIO]\n"
-            "RESPOSTA: [sua resposta pedagógica curta, falada, de 2 a 3 frases, sem markdown, sem asteriscos e sem emojis]\n\n"
-            "Instruções Pedagógicas:\n"
-            "1. Confie no que você OUVIU no áudio (se a transcrição auxiliar estiver errada ou sem sentido, ignore-a e use o áudio real).\n"
-            "2. Se o aluno repetiu ou tentou falar a sílaba/palavra pedida no histórico: ELOGIE com alegria e AVANCE para a próxima sílaba ou para uma nova palavra.\n"
-            "3. Se ele falou uma palavra nova ou fez uma pergunta: ensine o significado de forma simples e separe as sílabas (ex: BO-LA).\n"
-            "4. Se o áudio for VAZIO ou inaudível: peça com carinho para ele falar um pouquinho mais alto perto do microfone."
-        ),
-    ]
-
-    response = None
-    for m in [model_name, "gemini-2.0-flash", "gemini-1.5-flash"]:
+    if sabia_key and not sabia_key.startswith("mock-") and texto_whisper:
         try:
-            response = gemini_client.models.generate_content(
-                model=m,
-                contents=contents,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=sys_prompt,
-                    temperature=0.2,
+            logger.info("🇧🇷 Gerando resposta pedagógica com LLM nacional Sabiá-3 (Maritaca AI)...")
+            fala_sabia = _chamar_sabia_alfabetiza(texto_whisper, sys_prompt, last_ai_response, sabia_key)
+            if fala_sabia:
+                resposta_bruta = f"ALUNO: {texto_whisper}\nRESPOSTA: {fala_sabia}"
+        except Exception as sabia_err:
+            logger.warning(f"Sabiá-3 falhou ({sabia_err}), acionando Gemini multimodal...")
+
+    if not resposta_bruta:
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_key:
+            raise ValueError("Nem MARITACA_API_KEY (Sabiá-3) nem GEMINI_API_KEY estão configuradas.")
+            
+        gemini_client = genai.Client(api_key=gemini_key)
+        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        
+        contexto_str = ""
+        if last_ai_response:
+            contexto_str = f"HISTÓRICO RECENTE DA CONVERSA:\n{last_ai_response}\n\n"
+
+        dica_whisper = f"\n(Transcrição auxiliar preliminar: \"{texto_whisper}\")" if texto_whisper else ""
+
+        contents = [
+            genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+            (
+                f"{contexto_str}"
+                f"Ouça com muita atenção o áudio anexado do aluno.{dica_whisper}\n\n"
+                "Responda OBRIGATORIAMENTE no formato exato de duas linhas abaixo:\n"
+                "ALUNO: [transcreva exatamente as palavras ou sílabas que o aluno falou no áudio, sem inventar frases. Se houver apenas silêncio ou ruído, escreva VAZIO]\n"
+                "RESPOSTA: [sua resposta pedagógica curta, falada, de 2 a 3 frases, sem markdown, sem asteriscos e sem emojis]\n\n"
+                "Instruções Pedagógicas:\n"
+                "1. Confie no que você OUVIU no áudio (se a transcrição auxiliar estiver errada ou sem sentido, ignore-a e use o áudio real).\n"
+                "2. Se o aluno repetiu ou tentou falar a sílaba/palavra pedida no histórico: ELOGIE com alegria e AVANCE para a próxima sílaba ou para uma nova palavra.\n"
+                "3. Se ele falou uma palavra nova ou fez uma pergunta: ensine o significado de forma simples e separe as sílabas (ex: BO-LA).\n"
+                "4. Se o áudio for VAZIO ou inaudível: peça com carinho para ele falar um pouquinho mais alto perto do microfone."
+            ),
+        ]
+
+        response = None
+        for m in [model_name, "gemini-2.0-flash", "gemini-1.5-flash"]:
+            try:
+                response = gemini_client.models.generate_content(
+                    model=m,
+                    contents=contents,
+                    config=genai.types.GenerateContentConfig(
+                        system_instruction=sys_prompt,
+                        temperature=0.2,
+                    )
                 )
-            )
-            if response and response.text:
-                break
-        except Exception as model_err:
-            logger.warning(f"Falha ao gerar conteúdo com {m}: {model_err}")
+                if response and response.text:
+                    break
+            except Exception as model_err:
+                logger.warning(f"Falha ao gerar conteúdo com {m}: {model_err}")
 
-    if not response or not response.text:
-        raise RuntimeError("Não foi possível obter resposta dos modelos Gemini disponíveis.")
+        if not response or not response.text:
+            raise RuntimeError("Não foi possível obter resposta dos modelos Sabiá-3 ou Gemini disponíveis.")
 
-    resposta_bruta = response.text.strip()
+        resposta_bruta = response.text.strip()
     texto_aluno = texto_whisper
     resposta_texto = resposta_bruta
 

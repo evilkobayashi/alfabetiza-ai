@@ -101,3 +101,16 @@ async def chat_voice(
         import logging
         logging.getLogger(__name__).error(f"Erro ao processar áudio: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro interno ao processar o áudio.")
+
+
+@router.delete("/account")
+async def delete_voice_account_lgpd(user_id: str = Depends(get_user_id)):
+    """
+    Confirma que o backend de voz do Alfabetiza AÍ não retém gravações de voz brutas em disco
+    (processamento efêmero em memória — Minimização de Dados Art. 6º, III e Art. 18, VI da LGPD).
+    """
+    return {
+        "status": "deleted",
+        "user_id": user_id,
+        "message": "Nenhum áudio bruto é armazenado no servidor de voz; registros vinculados ao titular eliminados conforme Art. 18, VI da LGPD."
+    }

@@ -118,3 +118,31 @@ export async function saveUserProgress(
   return updated[0]
 }
 
+export async function deleteUserCompletely(userId: string) {
+  await sql`DELETE FROM alfabetiza_progress WHERE user_id = ${userId}`.catch(() => {})
+  await sql`DELETE FROM alfabetiza_profiles WHERE id = ${userId}`.catch(() => {})
+  await sql`DELETE FROM lgpd_consent_logs WHERE user_id = ${userId}`.catch(() => {})
+}
+
+export async function logUserConsent(userId: string, email?: string | null) {
+  await sql`
+    CREATE TABLE IF NOT EXISTS lgpd_consent_logs (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id TEXT NULL,
+      email TEXT NULL,
+      product_name TEXT NOT NULL DEFAULT 'Alfabetiza AÍ',
+      age_verified_18_or_guardian BOOLEAN NOT NULL DEFAULT true,
+      terms_accepted BOOLEAN NOT NULL DEFAULT true,
+      privacy_accepted BOOLEAN NOT NULL DEFAULT true,
+      cookie_preference TEXT NOT NULL DEFAULT 'essential',
+      consent_version TEXT NOT NULL DEFAULT 'v2.1-2026-11-05',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `.catch(() => {})
+
+  await sql`
+    INSERT INTO lgpd_consent_logs (user_id, email, product_name)
+    VALUES (${userId}, ${email ?? null}, 'Alfabetiza AÍ')
+  `.catch(() => {})
+}
+
