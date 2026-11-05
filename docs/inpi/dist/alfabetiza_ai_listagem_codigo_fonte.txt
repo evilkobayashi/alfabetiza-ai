@@ -1,0 +1,3937 @@
+================================================================================
+ALFABETIZA AÍ — LISTAGEM OFICIAL DE CÓDIGO-FONTE PARA REGISTRO NO INPI (LEI 9.609/98)
+Titular: Aí Tecnologia e Educação Ltda. ('AÍ')
+================================================================================
+
+
+--- ARQUIVO: README.md (28 linhas) ---
+<div align="center">
+
+# 🎙️ Alfabetiza AÍ
+
+### A primeira Inteligência Artificial de alfabetização com interface 100% conversacional (Voice-First)
+
+</div>
+
+O **Alfabetiza AÍ** quebra a principal barreira da educação digital: *exigir que o usuário saiba ler para conseguir navegar no aplicativo*. Com uma arquitetura sem interface gráfica complexa, o aluno utiliza apenas a voz para aprender a ler e escrever, sendo guiado por um tutor de IA hiper-paciente.
+
+---
+
+## 🚀 Diferenciais (Nível AAA)
+
+- **Voice-First UI:** Sem menus complexos. O aluno aperta um botão, fala o que não entendeu (Speech-To-Text) e a IA responde em áudio (Text-To-Speech).
+- **Latência Ultrabaixa (Edge):** Integração com a rede neural Whisper-Large-V3-Turbo (via Groq) para transcrição instantânea sem *delay*.
+- **Perfis Adaptativos:** O LLM adapta o tom de voz e os exemplos instantaneamente. O adulto da EJA é tratado com respeito (sem infantilização), a criança no KIDS é tratada com paciência, e há suporte para PCD.
+- **Orquestração Desacoplada:** Backend puramente em FastAPI isolando a lógica da IA, enquanto o frontend em Next.js lida com a captura nativa de áudio.
+
+## 🛠️ Stack Tecnológico
+
+- **Frontend:** Next.js 15, React 19, TailwindCSS, Clerk Auth (PWA-ready).
+- **Backend:** Python, FastAPI, Integração Multimodal.
+- **IA Pipeline:** Groq (Whisper STT) ➡️ Google Gemini Flash (Raciocínio Pedagógico) ➡️ Edge TTS (Voz Neural).
+- **Infraestrutura:** Vercel (Frontend) + Railway (Backend) + PostgreSQL.
+
+## 🔗 Ecossistema
+Faz parte da suíte **AÍ Tecnologia e Educação**, integrando-se estrategicamente para cobrir toda a jornada escolar pública e privada.
+
+
+--- ARQUIVO: backend/app/auth.py (50 linhas) ---
+import os
+import time
+import jwt
+from collections import defaultdict
+from fastapi import Header, HTTPException
+
+_jwks = None
+_usage: dict[tuple[str, str], int] = defaultdict(int)
+
+
+def _client() -> jwt.PyJWKClient:
+    global _jwks
+    url = os.getenv("CLERK_JWKS_URL") or "https://clerk.aitecnologia.xyz/.well-known/jwks.json"
+    if not url:
+        raise HTTPException(status_code=503, detail="Autenticação não configurada.")
+    if _jwks is None:
+        _jwks = jwt.PyJWKClient(url, cache_keys=True)
+    return _jwks
+
+
+async def get_user_id(authorization: str = Header(default="")) -> str:
+    """Valida o JWT da sessão Clerk e aplica a cota diária de interações por usuário."""
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Login necessário.")
+    try:
+        key = _client().get_signing_key_from_jwt(token).key
+        claims = jwt.decode(token, key, algorithms=["RS256"], options={"verify_aud": False})
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Sessão inválida ou expirada.")
+
+    user_id = claims["sub"]
+    
+    # Usuários PRO (Plano Família) têm voz ilimitada
+    meta = claims.get("public_metadata") or claims.get("metadata") or {}
+    is_pro = bool(meta.get("isPro") or claims.get("isPro"))
+    if is_pro:
+        return user_id
+
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    for k in [k for k in _usage if k[1] != day]:
+        del _usage[k]
+    limit = int(os.getenv("DAILY_VOICE_LIMIT", "100"))
+    if _usage[(user_id, day)] >= limit:
+        raise HTTPException(
+            status_code=429, 
+            detail=f"Limite diário de {limit} conversas gratuitas atingido. Assine o Plano Família para conversas ilimitadas!"
+        )
+    _usage[(user_id, day)] += 1
+    return user_id
+
+
+--- ARQUIVO: backend/app/main.py (32 linhas) ---
+import logging
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.routers import voice
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+app = FastAPI(
+    title="Alfabetiza AÍ - Voice Engine",
+    description="Motor AAA de alfabetização Voice-First (Gemini + Google Cloud TTS)",
+    version="1.0.0"
+)
+
+# CORS para o PWA (Next.js)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://alfabetiza-ai.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "*",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(voice.router)
+
+@app.get("/")
+def health_check():
+    return {"status": "Alfabetiza AÍ Voice Engine is running (AAA Quality)"}
+
+
+--- ARQUIVO: backend/app/routers/voice.py (103 linhas) ---
+import base64
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from app.auth import get_user_id
+from app.services.voice_ai_service import process_audio_interaction, transcribe_audio_only
+
+router = APIRouter(prefix="/api/voice", tags=["Alfabetiza AÍ - Voice"], dependencies=[Depends(get_user_id)])
+
+
+def _detect_mime(audio_bytes: bytes, raw_mime: str) -> str:
+    mime_type = raw_mime
+    if len(audio_bytes) >= 4:
+        if audio_bytes[:4] == b"RIFF":
+            mime_type = "audio/wav"
+        elif audio_bytes[:4] == b"OggS":
+            mime_type = "audio/ogg"
+        elif audio_bytes[:4] == b"\x1aE\xdf\xa3":
+            mime_type = "audio/webm"
+        elif audio_bytes[:3] == b"ID3" or audio_bytes[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+            mime_type = "audio/mp3"
+        elif len(audio_bytes) >= 12 and audio_bytes[4:8] == b"ftyp":
+            mime_type = "audio/mp4"
+    return mime_type
+
+
+@router.post("/transcribe")
+async def transcribe_voice(
+    audio_file: UploadFile = File(...),
+    target_hint: str = Form("")
+):
+    """Transcreve o áudio enviado pelo aluno usando Whisper STT / Gemini."""
+    audio_bytes = await audio_file.read()
+    if len(audio_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Arquivo de áudio excede o limite de 10 MB.")
+    if len(audio_bytes) < 350:
+        return {"text": ""}
+    raw_mime = (audio_file.content_type or "audio/webm").split(";")[0].strip()
+    mime_type = _detect_mime(audio_bytes, raw_mime)
+    text = await transcribe_audio_only(audio_bytes, mime_type, target_hint[:200])
+    return {"text": text}
+
+@router.post("/chat")
+async def chat_voice(
+    audio_file: UploadFile = File(...),
+    profile: str = Form("KIDS"), # KIDS, EJA, ou PCD
+    last_ai_response: str = Form("")
+):
+    """
+    Recebe um áudio do frontend (ex: .webm do MediaRecorder), 
+    processa com o Gemini 1.5 Flash e retorna o áudio TTS de resposta.
+    """
+    if profile not in ["KIDS", "EJA", "PCD"]:
+        raise HTTPException(status_code=400, detail="Perfil inválido.")
+
+    last_ai_response = (last_ai_response or "")[-1000:]
+        
+    try:
+        # Lê os bytes do áudio original
+        audio_bytes = await audio_file.read()
+        if len(audio_bytes) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Arquivo de áudio excede o limite de 10 MB.")
+        raw_mime = (audio_file.content_type or "audio/webm").split(";")[0].strip()
+        
+        # Detecção de mime type real por magic bytes
+        mime_type = _detect_mime(audio_bytes, raw_mime)
+
+        import logging
+        logging.getLogger(__name__).info(
+            f"Recebido áudio: {len(audio_bytes)} bytes | filename={audio_file.filename} | raw_mime={raw_mime} | mime_detectado={mime_type} | perfil={profile}"
+        )
+
+        if len(audio_bytes) < 400:
+            return {
+                "profile": profile,
+                "transcription_or_reasoning": "O áudio ficou muito curtinho ou sem som. Clique no microfone, fale com calma e clique para enviar!",
+                "student_transcription": "",
+                "audio_base64": "",
+                "mime_type": "audio/mp3"
+            }
+        
+        # Chama a inteligência artificial
+        resposta_texto, audio_out_bytes, texto_aluno = await process_audio_interaction(
+            audio_bytes, mime_type, profile, last_ai_response
+        )
+        
+        # Se falhou a geração do TTS por falta de credencial, o audio_out_bytes virá vazio
+        audio_b64 = ""
+        if audio_out_bytes:
+            audio_b64 = base64.b64encode(audio_out_bytes).decode("utf-8")
+            
+        return {
+            "profile": profile,
+            "transcription_or_reasoning": resposta_texto,
+            "student_transcription": texto_aluno,
+            "audio_base64": audio_b64,
+            "mime_type": "audio/mp3"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Erro ao processar áudio: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Erro interno ao processar o áudio.")
+
+
+--- ARQUIVO: backend/app/services/voice_ai_service.py (260 linhas) ---
+import os
+import io
+import logging
+from google import genai
+import edge_tts
+from groq import Groq
+
+logger = logging.getLogger(__name__)
+
+SYSTEM_PROMPTS = {
+    "KIDS": (
+        "Você é o 'Alfabetiza AÍ', um tutor de voz carinhoso, animado e paciente para crianças em fase de alfabetização.\n"
+        "OBJETIVO: Criar uma conversa interativa e dinâmica que avança a cada fala da criança.\n\n"
+        "COMO RESPONDER:\n"
+        "1. SE A CRIANÇA REPETIU O QUE VOCÊ PEDIU (ou tentou falar): Comemore efusivamente! (Ex: 'Muito bem!', 'Você arrasou!'). Depois, avance para o próximo pedacinho (a próxima sílaba) ou para a palavra inteira, ou pergunte que outra palavra ela quer aprender.\n"
+        "2. SE A CRIANÇA FALOU UMA PALAVRA NOVA: Explique o que é com um exemplo simples do dia a dia infantil (animais, brinquedos, escola), separe as sílabas com pausas (ex: BO-LA) e convide-a com carinho a repetir a primeira sílaba com você.\n"
+        "3. SE A CRIANÇA FEZ UMA PERGUNTA OU DISSE OUTRA COISA: Responda a dúvida com carinho e proponha uma palavra divertida para praticar som e letras.\n"
+        "4. SE O ÁUDIO FOR CONFUSO OU INAUDÍVEL: Seja acolhedor e peça gentilmente para ela falar mais pertinho do microfone.\n\n"
+        "REGRAS DE OURO:\n"
+        "- Resposta curta (2 a 4 frases simples), perfeita para ser ouvida em áudio.\n"
+        "- NUNCA repita a mesma explicação que você já deu no histórico recente. Sempre avance o aprendizado!\n"
+        "- NÃO use emojis, asteriscos ou formatações markdown. Apenas texto puro e limpo."
+    ),
+    "EJA": (
+        "Você é o tutor 'Alfabetiza AÍ' para jovens, adultos e idosos (Educação de Jovens e Adultos - EJA).\n"
+        "OBJETIVO: Ensino prático, digno, paciente e sem infantilização, focado no cotidiano e na cidadania.\n\n"
+        "COMO RESPONDER:\n"
+        "1. SE O ALUNO RESPONDEU OU REPETIU UMA PALAVRA/SÍLABA: Valide o acerto com respeito e encorajamento. Em seguida, avance para a próxima etapa (a sílaba seguinte, a palavra completa ou uma frase onde ela é usada no trabalho/compras).\n"
+        "2. SE O ALUNO TROUXE UMA PALAVRA NOVA: Explique o uso prático no cotidiano (trabalho, documentos, compras, saúde), mostre a divisão silábica pausada e convide a pronunciar.\n"
+        "3. SE O ALUNO FEZ UMA PERGUNTA: Responda com clareza e respeito.\n\n"
+        "REGRAS DE OURO:\n"
+        "- Tom respeitoso, maduro e acolhedor (2 a 4 frases diretas).\n"
+        "- NUNCA repita a mesma pergunta ou explicação. Progrida a lição!\n"
+        "- Apenas texto puro sem formatação markdown ou emojis."
+    ),
+    "PCD": (
+        "Você é o tutor inclusivo 'Alfabetiza AÍ' (foco em neurodivergentes: TEA, TDAH, Dislexia).\n"
+        "OBJETIVO: Comunicação clara, direta, previsível e sem sobrecarga sensorial.\n\n"
+        "COMO RESPONDER:\n"
+        "1. SE O ALUNO REPETIU OU RESPONDEU: Valide de forma calma e clara ('Excelente. Você disse [palavra].') e dê o próximo passo simples.\n"
+        "2. SE TROUXE NOVA PALAVRA: Apresente o significado concreto e a separação silábica direta.\n"
+        "3. Tom calmo, frases curtas, literais e previsíveis (2 a 3 frases).\n"
+        "4. Sem metáforas, sem ambiguidades, sem emojis ou marcações markdown."
+    )
+}
+
+VOICE_PROFILES = {
+    "KIDS": "pt-BR-FranciscaNeural", # Voz feminina expressiva e agradável
+    "EJA": "pt-BR-AntonioNeural",    # Voz masculina respeitosa e encorpada
+    "PCD": "pt-BR-FranciscaNeural"   # Pode ser a mesma, mas com tom calmo
+}
+
+WHISPER_HALLUCINATIONS = {
+    "obrigado",
+    "obrigado.",
+    "obrigado por assistir",
+    "obrigado por assistir.",
+    "legendas pela comunidade amara.org",
+    "amara.org",
+    "inscreva-se",
+    "inscreva-se no canal",
+    "até a próxima",
+    "tchau",
+    "...",
+    ".",
+}
+
+
+def _clean_whisper_text(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if text.lower().rstrip(".!,?") in WHISPER_HALLUCINATIONS:
+        return ""
+    return text
+
+
+async def process_audio_interaction(
+    audio_bytes: bytes, 
+    mime_type: str, 
+    profile: str,
+    last_ai_response: str = ""
+) -> tuple[str, bytes, str]:
+    """
+    1. STT auxiliar com Whisper (sem prompt enviesado) + Áudio Nativo direto no Gemini.
+    2. LLM com Gemini ouvindo o áudio real para máxima precisão fonética e pedagógica.
+    3. TTS com Edge Neural.
+    """
+    logger.info(f"Processando áudio para o perfil: {profile}")
+
+    # ===== ETAPA 1: STT auxiliar com Whisper (sem prompt para evitar alucinações) =====
+    groq_key = os.getenv("GROQ_API_KEY")
+    texto_whisper = ""
+    
+    if groq_key:
+        groq_client = Groq(api_key=groq_key)
+        ext = mime_type.split("/")[-1].split(";")[0] if "/" in mime_type else "webm"
+        if not ext or ext == "octet-stream":
+            ext = "webm"
+        file_tuple = (f"audio.{ext}", audio_bytes, mime_type)
+        whisper_model = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
+        try:
+            transcription_obj = groq_client.audio.transcriptions.create(
+                file=file_tuple,
+                model=whisper_model,
+                response_format="json",
+                language="pt",
+                temperature=0.0,
+            )
+            texto_whisper = _clean_whisper_text(transcription_obj.text)
+            logger.info(f"🗣️ STT Whisper ({whisper_model}) ouviu: '{texto_whisper}'")
+        except Exception as stt_err:
+            logger.warning(f"Whisper {whisper_model} falhou ({stt_err})")
+
+    # ===== ETAPA 2: Áudio Nativo + Cérebro Pedagógico com Gemini =====
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_key:
+        raise ValueError("GEMINI_API_KEY não configurada.")
+        
+    gemini_client = genai.Client(api_key=gemini_key)
+    sys_prompt = SYSTEM_PROMPTS.get(profile, SYSTEM_PROMPTS["KIDS"])
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    
+    contexto_str = ""
+    if last_ai_response:
+        contexto_str = f"HISTÓRICO RECENTE DA CONVERSA:\n{last_ai_response}\n\n"
+
+    dica_whisper = f"\n(Transcrição auxiliar preliminar: \"{texto_whisper}\")" if texto_whisper else ""
+
+    contents = [
+        genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+        (
+            f"{contexto_str}"
+            f"Ouça com muita atenção o áudio anexado do aluno.{dica_whisper}\n\n"
+            "Responda OBRIGATORIAMENTE no formato exato de duas linhas abaixo:\n"
+            "ALUNO: [transcreva exatamente as palavras ou sílabas que o aluno falou no áudio, sem inventar frases. Se houver apenas silêncio ou ruído, escreva VAZIO]\n"
+            "RESPOSTA: [sua resposta pedagógica curta, falada, de 2 a 3 frases, sem markdown, sem asteriscos e sem emojis]\n\n"
+            "Instruções Pedagógicas:\n"
+            "1. Confie no que você OUVIU no áudio (se a transcrição auxiliar estiver errada ou sem sentido, ignore-a e use o áudio real).\n"
+            "2. Se o aluno repetiu ou tentou falar a sílaba/palavra pedida no histórico: ELOGIE com alegria e AVANCE para a próxima sílaba ou para uma nova palavra.\n"
+            "3. Se ele falou uma palavra nova ou fez uma pergunta: ensine o significado de forma simples e separe as sílabas (ex: BO-LA).\n"
+            "4. Se o áudio for VAZIO ou inaudível: peça com carinho para ele falar um pouquinho mais alto perto do microfone."
+        ),
+    ]
+
+    response = None
+    for m in [model_name, "gemini-2.0-flash", "gemini-1.5-flash"]:
+        try:
+            response = gemini_client.models.generate_content(
+                model=m,
+                contents=contents,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=sys_prompt,
+                    temperature=0.2,
+                )
+            )
+            if response and response.text:
+                break
+        except Exception as model_err:
+            logger.warning(f"Falha ao gerar conteúdo com {m}: {model_err}")
+
+    if not response or not response.text:
+        raise RuntimeError("Não foi possível obter resposta dos modelos Gemini disponíveis.")
+
+    resposta_bruta = response.text.strip()
+    texto_aluno = texto_whisper
+    resposta_texto = resposta_bruta
+
+    if "RESPOSTA:" in resposta_bruta:
+        parts = resposta_bruta.split("RESPOSTA:", 1)
+        aluno_raw = parts[0].replace("ALUNO:", "").strip().strip('"').strip("'")
+        resposta_texto = parts[1].strip()
+        if aluno_raw and aluno_raw.upper() != "VAZIO":
+            texto_aluno = aluno_raw
+        elif aluno_raw.upper() == "VAZIO" and not texto_whisper:
+            texto_aluno = ""
+
+    # Anonimização LGPD/ECA
+    import re
+    if texto_aluno:
+        texto_aluno = re.sub(r'\b\d{4,}\b', '[DADO_PROTEGIDO]', texto_aluno)
+        texto_aluno = re.sub(r'\S+@\S+', '[DADO_PROTEGIDO]', texto_aluno)
+
+    logger.info(f"🎯 Aluno falou: '{texto_aluno}' | 🧠 Resposta IA: {resposta_texto}")
+    
+    # ===== ETAPA 3: TTS (Text-to-Speech) com Edge Neural =====
+    voice_name = VOICE_PROFILES.get(profile, "pt-BR-FranciscaNeural")
+    texto_para_voz = resposta_texto.replace("*", "").replace("#", "").replace("_", "")
+    
+    try:
+        communicate = edge_tts.Communicate(texto_para_voz, voice_name)
+        audio_chunks = []
+        
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_chunks.append(chunk["data"])
+                
+        audio_out_bytes = b"".join(audio_chunks)
+    except Exception as tts_err:
+        logger.warning(f"Falha ao gerar áudio TTS com Edge Neural, enviando resposta apenas em texto: {tts_err}")
+        audio_out_bytes = b""
+    
+    return resposta_texto, audio_out_bytes, texto_aluno
+
+
+async def transcribe_audio_only(audio_bytes: bytes, mime_type: str, target_hint: str = "") -> str:
+    """Transcreve áudio curto com precisão usando Áudio Nativo Gemini + fallback Whisper sem prompt alucinatório."""
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if gemini_key:
+        gemini_client = genai.Client(api_key=gemini_key)
+        for m in ["gemini-2.0-flash", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"), "gemini-1.5-flash"]:
+            try:
+                res = gemini_client.models.generate_content(
+                    model=m,
+                    contents=[
+                        genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                        (
+                            "Ouça o áudio e transcreva EXATAMENTE o que a pessoa falou em português brasileiro.\n"
+                            "Regras:\n"
+                            "- Retorne APENAS as palavras ou sílabas faladas, sem pontuação final e sem explicações.\n"
+                            "- Não invente frases que não estão no áudio.\n"
+                            "- Se houver apenas silêncio ou ruído sem fala inteligível, retorne exatamente: VAZIO"
+                        ),
+                    ],
+                    config=genai.types.GenerateContentConfig(temperature=0.0),
+                )
+                if res and res.text:
+                    cleaned = res.text.strip().strip('"').strip("'").rstrip(".!,?")
+                    if cleaned.upper() == "VAZIO":
+                        return ""
+                    if cleaned:
+                        logger.info(f"🎯 STT Gemini Audio ({m}) ouviu: '{cleaned}'")
+                        return cleaned
+            except Exception as err:
+                logger.warning(f"Falha no STT Gemini ({m}): {err}")
+
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key:
+        groq_client = Groq(api_key=groq_key)
+        ext = mime_type.split("/")[-1].split(";")[0] if "/" in mime_type else "webm"
+        if not ext or ext == "octet-stream":
+            ext = "webm"
+        file_tuple = (f"audio.{ext}", audio_bytes, mime_type)
+        for model in [os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo"), "whisper-large-v3"]:
+            try:
+                res = groq_client.audio.transcriptions.create(
+                    file=file_tuple,
+                    model=model,
+                    response_format="json",
+                    language="pt",
+                    temperature=0.0,
+                )
+                text = _clean_whisper_text(res.text)
+                if text:
+                    logger.info(f"🗣️ STT Whisper ({model}) ouviu: '{text}'")
+                    return text
+            except Exception as err:
+                logger.warning(f"Falha no STT ({model}): {err}")
+
+    return ""
+
+
+--- ARQUIVO: backend/test_api.py (20 linhas) ---
+import requests
+
+API_URL = "https://alfabetiza-ai-production.up.railway.app/api/voice/chat"
+
+print("--- Teste 1: Arquivo vazio (deve retornar mensagem de áudio muito curto) ---")
+try:
+    res = requests.post(API_URL, files={"audio_file": ("vazio.webm", b"123", "audio/webm")}, data={"profile": "KIDS"})
+    print("Status:", res.status_code)
+    print("Response:", res.json()["transcription_or_reasoning"] if res.status_code == 200 else res.text)
+except Exception as e:
+    print("Erro:", e)
+
+print("\n--- Teste 2: Áudio real (Example.ogg) ---")
+try:
+    with open("test_audio.ogg", "rb") as f:
+        res2 = requests.post(API_URL, files={"audio_file": ("test_audio.ogg", f, "audio/ogg")}, data={"profile": "KIDS"})
+    print("Status:", res2.status_code)
+    print("Response:", res2.json()["transcription_or_reasoning"] if res2.status_code == 200 else res2.text)
+except Exception as e:
+    print("Erro:", e)
+
+
+--- ARQUIVO: backend/test_gemini.py (4 linhas) ---
+import os, requests
+gemini_key = os.getenv("GEMINI_API_KEY")
+res = requests.get(f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}")
+print([m["name"] for m in res.json().get("models", [])])
+
+
+--- ARQUIVO: backend/test_groq.py (4 linhas) ---
+import os, requests
+key = os.getenv("GROQ_API_KEY")
+res = requests.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {key}"})
+print(res.json())
+
+
+--- ARQUIVO: docs/inpi/01_REGISTRO_SOFTWARE_E_SOFTWARE_INPI.md (47 linhas) ---
+# Dossiê de Registro de Programa de Computador (e-Software / INPI)
+
+**Titular / Empresa:** Aí Tecnologia e Educação Inova Simples (I.S.) / Aí Tecnologia e Educação Ltda. ("AÍ")  
+**Enquadramento Jurídico e Fomento:**
+- **Inova Simples (LC nº 167/2019 e Art. 65-A da LC nº 123/2006):** Natureza Jurídica `234-8` (*Empresa Simples de Inovação — Inova Simples*), elegível a **Exame Prioritário de Marcas e Patentes no INPI** (Portaria INPI/PR nº 365/2020) e redução de até 60% em emolumentos federais (GRUs).
+- **Marco Legal das Startups (LC nº 182/2021):** Habilitado para contratação pública via **CPSI** (Contrato Público para Solução Inovadora).
+- **PBIA (Plano Brasileiro de Inteligência Artificial 2024–2028 — MCTI / FINEP / BNDES):** Enquadrado no **Eixo 3 (IA para Melhoria dos Serviços Públicos — Educação)** e **Eixo 4 (Inovação Empresarial em IA Soberana)**, operando com orquestração prioritária em **Modelos de Linguagem Brasileiros (Sabiá-4 / Sabiazinho-4 — Maritaca AI `-br-sp`, SoberanIA e Tucano)** e residência de dados 100% em território nacional.
+- **Base Legal de Propriedade Intelectual:** Lei nº 9.609/1998 (Lei de Software), Lei nº 9.610/1998 (Direito Autoral) e Instrução Normativa INPI/PR nº 099/2019.
+
+---
+
+## 1. Dados de Preenchimento no Sistema e-Software (GRU Código 730)
+
+| Campo no Formulário INPI | Valor Recomendado para Preenchimento |
+| :--- | :--- |
+| **Título do Programa** | ALFABETIZA AÍ — Plataforma de Alfabetização Assistida por Inteligência Artificial com Interface 100% Conversacional (Voice-First) e Adaptação EJA/KIDS/PCD |
+| **Data de Criação / Publicação** | 2026 |
+| **Natureza Jurídica do Titular** | `234-8` (Empresa Simples de Inovação — Inova Simples) ou `206-2` (Sociedade Empresária Limitada — ME/EPP) |
+| **Algoritmo de Hash (Resumo Digital)** | `SHA-512` (Padrão oficial recomendado pelo INPI) |
+| **Resumo Digital Hash (SHA-512)** | Consulte `dist/HASH_RESUMO_DIGITAL_INPI.txt` |
+| **Linguagens de Programação** | `PYTHON, TYPESCRIPT, JAVASCRIPT, SQL, HTML, CSS` |
+| **Campo de Aplicação (Tabela INPI)** | `ED-01 (Educação / Alfabetização Assistida por Computador), ED-03 (Educação Especial e Inclusiva / EJA), IA-02 (Processamento de Voz e Linguagem Natural)` |
+| **Tipo de Programa (Tabela INPI)** | `IA-01 (Inteligência Artificial), AP-01 (Aplicativo de Uso Específico), SM-01 (Sistemas Multimídia / Áudio)` |
+| **Derivação / Obra Original** | Obra Original (Titularidade: Aí Tecnologia e Educação Inova Simples / Ltda.) |
+
+---
+
+## 2. Memorial Descritivo Técnico, Soberania de Dados (PBIA) e Arquitetura
+
+### 2.1. Escopo e Finalidade Técnica
+O sistema **ALFABETIZA AÍ** resolve problemas técnicos no domínio de processamento de sinais de fala em baixa latência, síntese vocal neural e sistemas tutores inteligentes operados sem exigência de letramento prévio (interfaces Voice-First), operando sob arquitetura de **Soberania Tecnológica Nacional** em conformidade com o **Plano Brasileiro de Inteligência Artificial (PBIA 2024–2028)** e a **LGPD (Lei nº 13.709/2018, Art. 14 — proteção de dados de crianças e adolescentes)**.
+
+### 2.2. Subsistemas e Módulos Computacionais
+- **(110) Capturador Acústico Zero-Text UI no Cliente com Detecção de Atividade Vocal e Compressão de Fluxo de Áudio;**
+- **(120) Pipeline de Transcrição Fonética de Ultrabaixa Latência em Borda (Rede Neural Whisper-Large-V3-Turbo);**
+- **(130) Motor de Raciocínio Fonético-Pedagógico com Máquina de Estados Adaptativa por Perfil (KIDS, EJA Não-Infantilizado e PCD);**
+- **(140) Sincronizador Multimodal de Estímulo Visual-Auditivo (Destaque Simultâneo de Sílabas/Grafemas e Síntese Neural Edge TTS);**
+- **(150) Módulo de Telemetria de Progresso Fonológico e Persistência de Jornada de Letramento em Banco Multi-Tenant.**
+- **(160) Camada de Orquestração Soberana PBIA e Anonimização LGPD:** Roteamento prioritário para modelos nacionais (**Sabiá-4 / Sabiazinho-4** em infraestrutura `-br-sp`, **SoberanIA** e **Tucano**) com anonimização em trânsito de dados pessoais e processamento documental local.
+
+---
+
+## 3. Instruções de Protocolo no INPI, Inova Simples (Fast-Track) e Guarda Legal
+1. **Abertura / Vinculação Inova Simples (`Natureza Jurídica 234-8`):** No portal Redesim (`gov.br/redesim`), utilize o CNPJ Inova Simples para usufruir do **desconto de até 60% nas taxas federais (GRUs)** e comunicação automática de prioridade ao INPI.
+2. **Registro de Software (GRU 730):** Emita e pague a **GRU código 730** no portal do INPI (`https://www.gov.br/inpi/pt-br/servicos/programas-de-computador`), copie o **Hash SHA-512** de `dist/HASH_RESUMO_DIGITAL_INPI.txt` e cole no campo **"Resumo Digital Hash"** do formulário eletrônico e-Software.
+3. **Pedido de Patente com Exame Prioritário Startup / Inova Simples (GRU 200 + GRU 279):** Ao protocolar o relatório descritivo `dist/PEDIDO_PATENTE_INPI_ALFABETIZA_AI.docx`, solicite o **Trâmite Prioritário para Startups / Inova Simples (Portaria INPI/PR nº 365/2020)**.
+4. **Guarda Legal Pericial:** Conserve de forma imutável o arquivo `dist/alfabetiza_ai_codigo_fonte_inpi.zip` — ele constitui a prova pericial de integridade vinculada ao certificado do INPI e aos editais da **FINEP / BNDES / CPSI**.
+
+
+--- ARQUIVO: docs/inpi/02_RELATORIO_DESCRITIVO_PATENTE_INPI.md (46 linhas) ---
+# Relatório Descritivo de Pedido de Patente de Invenção (INPI)
+
+> **Titular:** Aí Tecnologia e Educação Inova Simples (I.S.) / Aí Tecnologia e Educação Ltda. ("AÍ")
+> **Enquadramento:** Empresa Simples de Inovação — Inova Simples (`Natureza Jurídica 234-8`, LC nº 167/2019 e LC nº 182/2021) com direito a **Trâmite Prioritário de Patente (Portaria INPI/PR nº 365/2020 — GRU 279)** e alinhamento estratégico ao **Plano Brasileiro de Inteligência Artificial (PBIA 2024–2028 / MCTI / FINEP)** com inferência prioritária em **Modelos de IA Nacionais (Sabiá-4 / Sabiazinho-4 / SoberanIA / Tucano)**.
+> **Normativa:** Lei nº 9.279/96 (LPI), IN INPI/PR nº 30/2013 e Diretrizes de Exame de Invenções Implementadas por Computador (IIC).
+
+---
+
+## TÍTULO DA INVENÇÃO
+**MÉTODO E SISTEMA IMPLEMENTADOS POR COMPUTADOR PARA ALFABETIZAÇÃO ASSISTIDA POR INTERFACE EXCLUSIVAMENTE VOCAL DE BAIXA LATÊNCIA COM ADAPTAÇÃO FONÉTICO-COGNITIVA DINÂMICA POR PERFIL ETÁRIO E NEURODIVERGENTE**
+
+---
+
+## CAMPO DA INVENÇÃO
+**[001]** A presente invenção pertence ao campo da engenharia de sistemas computacionais aplicados a processamento de sinais de fala em baixa latência, síntese vocal neural e sistemas tutores inteligentes operados sem exigência de letramento prévio (interfaces Voice-First).
+
+---
+
+## FUNDAMENTOS DA TÉCNICA E PROBLEMAS DO ESTADO DA TÉCNICA
+**[002]** No estado da técnica, sistemas convencionais apresentam limitações estruturais severas que impedem a automação confiável, determinística, soberana e auditável do fluxo proposto:
+
+**[003]** Paradoxo de acessibilidade em softwares de alfabetização convencionais, que exigem leitura de menus textuais por usuários ainda não alfabetizados;
+**[004]** Inadequação semântica e infantilização de alunos adultos da Educação de Jovens e Adultos (EJA) ou sobrecarga sensorial em alunos com deficiência (PCD);
+**[005]** Elevada latência ponta a ponta entre captura de voz, transcrição fonética, inferência pedagógica e síntese de áudio, comprometendo a associação grafema-fonema em tempo real.
+
+---
+
+## SUMÁRIO DA INVENÇÃO
+**[006]** A presente invenção soluciona os problemas técnicos do estado da técnica por meio de um sistema computacional integrado (100) e respectivo método de execução estruturado nos seguintes estágios cooperantes:
+- (110) Capturador Acústico Zero-Text UI no Cliente com Detecção de Atividade Vocal e Compressão de Fluxo de Áudio;
+- (120) Pipeline de Transcrição Fonética de Ultrabaixa Latência em Borda (Rede Neural Whisper-Large-V3-Turbo);
+- (130) Motor de Raciocínio Fonético-Pedagógico com Máquina de Estados Adaptativa por Perfil (KIDS, EJA Não-Infantilizado e PCD);
+- (140) Sincronizador Multimodal de Estímulo Visual-Auditivo (Destaque Simultâneo de Sílabas/Grafemas e Síntese Neural Edge TTS);
+- (150) Módulo de Telemetria de Progresso Fonológico e Persistência de Jornada de Letramento em Banco Multi-Tenant.
+- (160) Barramento de Anonimização em Trânsito (LGPD Art. 14) e Roteamento Prioritário para Modelos de Inteligência Artificial Soberanos Nacionais (família Sabiá-4 / Sabiazinho-4 / SoberanIA / Tucano) hospedados em jurisdição brasileira (`-br-sp`).
+
+---
+
+## BREVE DESCRIÇÃO DAS FIGURAS
+**[007]** **A Figura 1** ilustra o diagrama de blocos da arquitetura do sistema **(100)** e seus módulos operacionais **(110 a 160)**.
+
+---
+
+## DESCRIÇÃO DETALHADA DA INVENÇÃO
+**[008]** Com referência à **Figura 1**, o sistema **(100)** compreende um terminal cliente reativo **(105)** em comunicação segura com um servidor de aplicação **(108)**, barramento de inferência soberana nacional **(160)** e banco de dados distribuído em território nacional **(165)**.
+**[009]** Durante a operação do método, os subsistemas **(110 a 160)** operam de maneira encadeada sobre estruturas de dados tipadas em memória e persistidas em banco relacional/vetorial, aplicando mascaramento determinístico de dados pessoais antes de qualquer chamada de inferência e priorizando modelos de linguagem treinados nativamente na língua portuguesa e nas matrizes normativas brasileiras (BNCC, ENEM e legislação educacional), garantindo rastreabilidade ponta a ponta, determinismo estrutural nas saídas geradas e eliminação dos gargalos de latência e inconsistência técnica verificados no estado da técnica.
+
+
+--- ARQUIVO: docs/inpi/03_QUADRO_REIVINDICATORIO_E_RESUMO_INPI.md (23 linhas) ---
+# Quadro Reivindicatório, Figuras Técnicas e Resumo (Padrão INPI)
+
+---
+
+## REIVINDICAÇÕES
+
+**1. MÉTODO E SISTEMA IMPLEMENTADOS POR COMPUTADOR PARA ALFABETIZAÇÃO ASSISTIDA POR INTERFACE EXCLUSIVAMENTE VOCAL DE BAIXA LATÊNCIA COM ADAPTAÇÃO FONÉTICO-COGNITIVA DINÂMICA POR PERFIL ETÁRIO E NEURODIVERGENTE**, **caracterizado por** compreender as etapas implementadas por computador de:
+- executar a etapa operacional em (110) Capturador Acústico Zero-Text UI no Cliente com Detecção de Atividade Vocal e Compressão de Fluxo de Áudio;
+- executar a etapa operacional em (120) Pipeline de Transcrição Fonética de Ultrabaixa Latência em Borda (Rede Neural Whisper-Large-V3-Turbo);
+- executar a etapa operacional em (130) Motor de Raciocínio Fonético-Pedagógico com Máquina de Estados Adaptativa por Perfil (KIDS, EJA Não-Infantilizado e PCD);
+- executar a etapa operacional em (140) Sincronizador Multimodal de Estímulo Visual-Auditivo (Destaque Simultâneo de Sílabas/Grafemas e Síntese Neural Edge TTS);
+- executar a etapa operacional em (150) Módulo de Telemetria de Progresso Fonológico e Persistência de Jornada de Letramento em Banco Multi-Tenant.
+
+**2. MÉTODO, de acordo com a reivindicação 1**, **caracterizado por** todas as transições entre os estágios (110) a (150) operarem sobre esquemas de dados validados em formato JSON estrito com anonimização prévia de dados sensíveis em trânsito e roteamento prioritário de inferência para modelos de linguagem soberanos hospedados em território nacional (160).
+
+**3. SISTEMA IMPLEMENTADO POR COMPUTADOR (100)**, **caracterizado por** compreender um terminal cliente (105), um servidor de aplicação (108), um barramento de orquestração de modelos nacionais (160), um banco de dados estruturado (165) e os módulos operacionais (110 a 150) configurados para executar o método definido na reivindicação 1 ou 2.
+
+---
+
+## RESUMO (Padrão INPI — 50 a 200 palavras)
+
+**MÉTODO E SISTEMA IMPLEMENTADOS POR COMPUTADOR PARA ALFABETIZAÇÃO ASSISTIDA POR INTERFACE EXCLUSIVAMENTE VOCAL DE BAIXA LATÊNCIA COM ADAPTAÇÃO FONÉTICO-COGNITIVA DINÂMICA POR PERFIL ETÁRIO E NEURODIVERGENTE.**
+A presente invenção refere-se a um método e sistema implementados por computador (100) para alfabetização assistida por inteligência artificial operada por interface 100% conversacional (Voice-First), eliminando a necessidade de leitura prévia para navegação. O sistema compreende um capturador acústico (110) acoplado a um motor de transcrição neural de ultrabaixa latência (120) e a um orquestrador pedagógico (130) que ajusta dinamicamente o vocabulário, a cadência fonética e os exemplos práticos segundo o perfil cognitivo-etário do usuário (Crianças/KIDS, Educação de Jovens e Adultos/EJA sem infantilização e Pessoas com Deficiência/PCD). A resposta pedagógica é convertida em fluxo de voz neural sincronizado com estímulos visuais de decomposição silábica e grafema-fonema (140), registrando métricas evolutivas de letramento em base de dados estruturada (150).
+
+
+--- ARQUIVO: frontend/AGENTS.md (9 linhas) ---
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
+
+
+--- ARQUIVO: frontend/CLAUDE.md (1 linhas) ---
+@AGENTS.md
+
+
+--- ARQUIVO: frontend/README.md (36 linhas) ---
+This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+
+## Getting Started
+
+First, run the development server:
+
+```bash
+npm run dev
+# or
+yarn dev
+# or
+pnpm dev
+# or
+bun dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+
+## Learn More
+
+To learn more about Next.js, take a look at the following resources:
+
+- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
+- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+
+You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+
+## Deploy on Vercel
+
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+
+Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+
+--- ARQUIVO: frontend/next-env.d.ts (7 linhas) ---
+/// <reference types="next" />
+/// <reference types="next/image-types/global" />
+import "./.next/types/routes.d.ts";
+import "./.next/types/root-params.d.ts";
+
+// NOTE: This file should not be edited
+// see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
+
+
+--- ARQUIVO: frontend/next.config.ts (7 linhas) ---
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  /* config options here */
+};
+
+export default nextConfig;
+
+
+--- ARQUIVO: frontend/package.json (31 linhas) ---
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@clerk/localizations": "^4.16.1",
+    "@clerk/nextjs": "^7.9.2",
+    "framer-motion": "^13.2.0",
+    "lucide-react": "^1.45.0",
+    "next": "^16.3.5",
+    "postgres": "^3.4.9",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+
+
+--- ARQUIVO: frontend/src/app/api/pagamento/checkout/route.ts (106 linhas) ---
+import { auth, currentUser } from '@clerk/nextjs/server'
+import { NextResponse } from 'next/server'
+
+const ASAAS_API_KEY = process.env.ASAAS_API_KEY || ''
+const ASAAS_URL = process.env.ASAAS_URL || 'https://api.asaas.com/v3'
+
+export async function POST(req: Request) {
+  try {
+    const { userId } = await auth()
+    if (!userId) {
+      return NextResponse.json({ error: 'Faça login para assinar.' }, { status: 401 })
+    }
+
+    if (!ASAAS_API_KEY) {
+      return NextResponse.json({ error: 'Gateway de pagamento não configurado no servidor.' }, { status: 500 })
+    }
+
+    const body = await req.json().catch(() => ({}))
+    const cycle = body.cycle === 'YEARLY' ? 'YEARLY' : 'MONTHLY'
+    const cpfCnpjRaw = (body.cpfCnpj || '').replace(/\D/g, '')
+
+    if (cpfCnpjRaw.length !== 11 && cpfCnpjRaw.length !== 14) {
+      return NextResponse.json({ error: 'CPF ou CNPJ inválido.' }, { status: 422 })
+    }
+
+    const user = await currentUser()
+    const email = user?.emailAddresses?.[0]?.emailAddress || `${userId}@alfabetiza.ai`
+    const name = user?.fullName || [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'Assinante Alfabetiza AÍ'
+
+    const isYearly = cycle === 'YEARLY'
+    const value = isYearly ? 147.00 : 24.90
+    const description = isYearly 
+      ? 'Alfabetiza AÍ - Plano Família Anual (Voz Ilimitada)'
+      : 'Alfabetiza AÍ - Plano Família Mensal (Voz Ilimitada)'
+
+    const headers = {
+      access_token: ASAAS_API_KEY,
+      'Content-Type': 'application/json',
+    }
+
+    // 1. Criar ou obter cliente no Asaas
+    const custRes = await fetch(`${ASAAS_URL}/customers`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name, email, cpfCnpj: cpfCnpjRaw }),
+    })
+
+    if (!custRes.ok) {
+      const err = await custRes.json().catch(() => ({}))
+      console.error('Erro Asaas customers:', err)
+      return NextResponse.json({ error: 'Erro ao cadastrar cliente no Asaas.' }, { status: 400 })
+    }
+
+    const custData = await custRes.json()
+    const customerId = custData.id
+
+    // 2. Criar cobrança PIX com vencimento amanhã
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    const dueDate = tomorrow.toISOString().split('T')[0]
+
+    const payRes = await fetch(`${ASAAS_URL}/payments`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        customer: customerId,
+        billingType: 'PIX',
+        value,
+        dueDate,
+        description,
+        externalReference: `${userId}:${cycle}`,
+      }),
+    })
+
+    if (!payRes.ok) {
+      const err = await payRes.json().catch(() => ({}))
+      console.error('Erro Asaas payments:', err)
+      return NextResponse.json({ error: 'Erro ao gerar cobrança Asaas.' }, { status: 400 })
+    }
+
+    const payData = await payRes.json()
+    const paymentId = payData.id
+
+    // 3. Obter QR Code PIX
+    const qrRes = await fetch(`${ASAAS_URL}/payments/${paymentId}/pixQrCode`, {
+      headers,
+    })
+
+    if (!qrRes.ok) {
+      return NextResponse.json({ error: 'Erro ao obter QR Code PIX.' }, { status: 400 })
+    }
+
+    const qrData = await qrRes.json()
+
+    return NextResponse.json({
+      paymentId,
+      value,
+      cycle,
+      qrCode: qrData.encodedImage,
+      payload: qrData.payload,
+    })
+  } catch (error: any) {
+    console.error('Erro em /api/pagamento/checkout:', error)
+    return NextResponse.json({ error: 'Erro interno ao processar checkout.' }, { status: 500 })
+  }
+}
+
+
+--- ARQUIVO: frontend/src/app/api/pagamento/webhook/route.ts (56 linhas) ---
+import { clerkClient } from '@clerk/nextjs/server'
+import { setUserProStatus } from '@/lib/db'
+import { NextResponse } from 'next/server'
+import crypto from 'crypto'
+
+const WEBHOOK_TOKEN = process.env.ASAAS_WEBHOOK_TOKEN || ''
+
+export async function POST(req: Request) {
+  try {
+    const asaasToken = req.headers.get('asaas-access-token') || ''
+    
+    // Verificação em tempo constante do token Asaas
+    if (
+      !WEBHOOK_TOKEN ||
+      !asaasToken ||
+      !crypto.timingSafeEqual(Buffer.from(asaasToken), Buffer.from(WEBHOOK_TOKEN))
+    ) {
+      return NextResponse.json({ error: 'Token de webhook inválido.' }, { status: 401 })
+    }
+
+    const payload = await req.json().catch(() => ({}))
+    const event = payload.event
+
+    if (event === 'PAYMENT_RECEIVED' || event === 'PAYMENT_CONFIRMED') {
+      const payment = payload.payment || {}
+      const rawRef = payment.externalReference || ''
+      const paymentId = payment.id
+
+      if (rawRef) {
+        const [userId, cycle] = rawRef.split(':')
+        const planType = cycle === 'YEARLY' ? 'family_yearly' : 'family_monthly'
+
+        // 1. Atualiza no PostgreSQL
+        await setUserProStatus(userId, true, planType, paymentId)
+
+        // 2. Atualiza no Clerk User Metadata para persistência em sessão
+        try {
+          const client = await clerkClient()
+          await client.users.updateUserMetadata(userId, {
+            publicMetadata: {
+              isPro: true,
+              plan: planType,
+            },
+          })
+        } catch (clerkErr) {
+          console.error('Erro ao atualizar metadata no Clerk:', clerkErr)
+        }
+      }
+    }
+
+    return NextResponse.json({ received: true })
+  } catch (error: any) {
+    console.error('Erro em webhook Asaas:', error)
+    return NextResponse.json({ error: 'Erro interno no webhook.' }, { status: 500 })
+  }
+}
+
+
+--- ARQUIVO: frontend/src/app/api/profile/route.ts (31 linhas) ---
+import { auth, currentUser } from '@clerk/nextjs/server'
+import { upsertUserProfile } from '@/lib/db'
+import { NextResponse } from 'next/server'
+
+export async function POST(req: Request) {
+  try {
+    const { userId } = await auth()
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { perfil } = await req.json()
+    if (!perfil || !['KIDS', 'EJA', 'PCD'].includes(perfil)) {
+      return NextResponse.json({ error: 'Perfil inválido' }, { status: 400 })
+    }
+
+    const user = await currentUser()
+    const email = user?.emailAddresses?.[0]?.emailAddress || null
+    const fullName =
+      user?.fullName ||
+      [user?.firstName, user?.lastName].filter(Boolean).join(' ') ||
+      null
+
+    const saved = await upsertUserProfile(userId, perfil, email, fullName)
+
+    return NextResponse.json({ success: true, profile: saved[0] })
+  } catch (error: any) {
+    console.error('Error in /api/profile:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+
+--- ARQUIVO: frontend/src/app/api/progress/route.ts (42 linhas) ---
+import { auth } from '@clerk/nextjs/server'
+import { getUserProgress, saveUserProgress } from '@/lib/db'
+import { NextResponse } from 'next/server'
+
+export async function GET() {
+  try {
+    const { userId } = await auth()
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const progress = await getUserProgress(userId)
+    return NextResponse.json({ success: true, progress })
+  } catch (error: any) {
+    console.error('Error in GET /api/progress:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const { userId } = await auth()
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const body = await req.json()
+    const { letra, silaba, palavraLida, minutos } = body
+
+    const updated = await saveUserProgress(userId, {
+      letra: typeof letra === 'string' ? letra.trim() : undefined,
+      silaba: typeof silaba === 'string' ? silaba.trim() : undefined,
+      palavraLida: Boolean(palavraLida),
+      minutos: typeof minutos === 'number' ? Math.max(0, minutos) : undefined,
+    })
+
+    return NextResponse.json({ success: true, progress: updated })
+  } catch (error: any) {
+    console.error('Error in POST /api/progress:', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+
+--- ARQUIVO: frontend/src/app/aula-interativa/page.tsx (739 linhas) ---
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+import Link from "next/link";
+import { useAuth } from "@clerk/nextjs";
+import { Mic, Square, Loader2, Volume2, ArrowRight, ArrowLeft, BookOpen, Star, Trophy, RotateCcw } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+
+interface LessonPage {
+  id: number;
+  module: string;
+  title: string;
+  image: string;
+  text: string;
+  targetWord: string;
+  syllables: string;
+  teacherAudioMock: string;
+  type: "read" | "sentence";
+}
+
+const LESSON_PAGES: LessonPage[] = [
+  {
+    id: 1,
+    module: "Módulo 1: Vogais e Sons",
+    title: "A Letra A da Abelha",
+    image: "https://images.unsplash.com/photo-1587049352847-4a222e784d38?auto=format&fit=crop&q=80&w=800",
+    text: "A ABELHA",
+    targetWord: "ABELHA",
+    syllables: "A - BE - LHA",
+    teacherAudioMock: "Veja a abelha na flor! Ela começa com a vogal A. Fale em voz alta: ABELHA.",
+    type: "read"
+  },
+  {
+    id: 2,
+    module: "Módulo 1: Vogais e Sons",
+    title: "A Bola Colorida",
+    image: "https://images.unsplash.com/photo-1575361204480-aadea25e6e68?auto=format&fit=crop&q=80&w=800",
+    text: "A BOLA",
+    targetWord: "BOLA",
+    syllables: "BO - LA",
+    teacherAudioMock: "Olhe a bola no campo! Vamos juntar BO com LA. Diga em voz alta: BOLA.",
+    type: "read"
+  },
+  {
+    id: 3,
+    module: "Módulo 2: Animais",
+    title: "Aventuras com a Letra G",
+    image: "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?auto=format&fit=crop&q=80&w=800",
+    text: "O GATO",
+    targetWord: "GATO",
+    syllables: "GA - TO",
+    teacherAudioMock: "Veja a foto. Que animal é esse? Tente ler a palavra em voz alta: GATO.",
+    type: "read"
+  },
+  {
+    id: 4,
+    module: "Módulo 2: Animais",
+    title: "Aventuras com a Letra G",
+    image: "https://images.unsplash.com/photo-1548247416-ec66f4900b2e?auto=format&fit=crop&q=80&w=800",
+    text: "O GATO BEBE LEITE",
+    targetWord: "LEITE",
+    syllables: "LEI - TE",
+    teacherAudioMock: "Muito bem! O gato gosta muito de uma bebida branca. Leia a palavra destacada: LEITE.",
+    type: "sentence"
+  },
+  {
+    id: 5,
+    module: "Módulo 2: Animais",
+    title: "O Pato na Lagoa",
+    image: "https://images.unsplash.com/photo-1555852095-64e7428df0fa?auto=format&fit=crop&q=80&w=800",
+    text: "O PATO NADA",
+    targetWord: "PATO",
+    syllables: "PA - TO",
+    teacherAudioMock: "Quem está nadando na água? É o pato! Junte PA com TO e fale: PATO.",
+    type: "read"
+  },
+  {
+    id: 6,
+    module: "Módulo 2: Animais",
+    title: "O Cachorro Amigo",
+    image: "https://images.unsplash.com/photo-1543466835-00a7907e9de1?auto=format&fit=crop&q=80&w=800",
+    text: "O CACHORRO",
+    targetWord: "CACHORRO",
+    syllables: "CA - CHOR - RO",
+    teacherAudioMock: "Que amigo fiel! Vamos falar o nome dele em voz alta: CACHORRO.",
+    type: "read"
+  },
+  {
+    id: 7,
+    module: "Módulo 3: Cotidiano e Casa",
+    title: "Nossa Moradia",
+    image: "https://images.unsplash.com/photo-1518780664697-55e3ad937233?auto=format&fit=crop&q=80&w=800",
+    text: "A CASA BONITA",
+    targetWord: "CASA",
+    syllables: "CA - SA",
+    teacherAudioMock: "Onde nós moramos com nossa família? Na casa! Diga em voz alta: CASA.",
+    type: "read"
+  },
+  {
+    id: 8,
+    module: "Módulo 3: Cotidiano e Casa",
+    title: "Hora de Aprender",
+    image: "https://images.unsplash.com/photo-1503676260728-1c00da094a0b?auto=format&fit=crop&q=80&w=800",
+    text: "EU VOU PARA A ESCOLA",
+    targetWord: "ESCOLA",
+    syllables: "ES - CO - LA",
+    teacherAudioMock: "Lugar de aprender e fazer amigos! Leia a palavra destacada: ESCOLA.",
+    type: "sentence"
+  },
+  {
+    id: 9,
+    module: "Módulo 4: Pequenas Frases",
+    title: "Dia Ensolarado",
+    image: "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&q=80&w=800",
+    text: "O SOL BRILHA NO CÉU",
+    targetWord: "SOL",
+    syllables: "SOL",
+    teacherAudioMock: "Olhe que dia lindo! Quem está brilhando lá no alto? Diga em voz alta: SOL.",
+    type: "sentence"
+  },
+  {
+    id: 10,
+    module: "Módulo 4: Pequenas Frases",
+    title: "Amor pela Leitura",
+    image: "https://images.unsplash.com/photo-1512820790803-83ca734da794?auto=format&fit=crop&q=80&w=800",
+    text: "EU GOSTO DE LER LIVROS",
+    targetWord: "LIVROS",
+    syllables: "LI - VROS",
+    teacherAudioMock: "Você está lendo cada vez melhor! Para fechar com chave de ouro, diga: LIVROS.",
+    type: "sentence"
+  }
+];
+
+function normalizePt(str: string): string {
+  return str
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, "")
+    .trim();
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] =
+        a[i - 1] === b[j - 1]
+          ? dp[i - 1][j - 1]
+          : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+function phoneticMatch(spokenRaw: string, targetRaw: string): boolean {
+  const spoken = normalizePt(spokenRaw);
+  const target = normalizePt(targetRaw);
+  if (!spoken || !target) return false;
+
+  const phoneticNormalize = (w: string) =>
+    w
+      .replace(/S$/, "")
+      .replace(/U$/, "O")
+      .replace(/I$/, "E")
+      .replace(/LH/g, "LI")
+      .replace(/RR/g, "R")
+      .replace(/SS/g, "S")
+      .replace(/C([EI])/g, "S$1");
+
+  const normTarget = phoneticNormalize(target);
+  const words = spoken.split(/\s+/).filter(Boolean);
+
+  // Verifica também a junção de sílabas caso o aluno tenha falado pausado (ex: "GA TO" -> "GATO")
+  const joinedSpoken = phoneticNormalize(words.join(""));
+  if (joinedSpoken === normTarget) return true;
+
+  for (const w of words) {
+    const nw = phoneticNormalize(w);
+    if (nw === normTarget) return true;
+    if (normTarget.length >= 4 && nw.length >= 3 && levenshtein(nw, normTarget) <= 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export default function AulaInterativa() {
+  const { getToken } = useAuth();
+  const [currentPage, setCurrentPage] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [feedback, setFeedback] = useState<"none" | "success" | "retry">("none");
+  const [score, setScore] = useState(0);
+  const [studentSaid, setStudentSaid] = useState<string>("");
+  const [teacherMessage, setTeacherMessage] = useState<string>("");
+
+  const pageData = LESSON_PAGES[currentPage];
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const handledRef = useRef<boolean>(false);
+
+  const speakText = (text: string, onEnd?: () => void) => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "pt-BR";
+      utterance.rate = 0.92;
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        if (onEnd) onEnd();
+      };
+      utterance.onerror = () => setIsSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+    } else {
+      setIsSpeaking(true);
+      setTimeout(() => {
+        setIsSpeaking(false);
+        if (onEnd) onEnd();
+      }, 2500);
+    }
+  };
+
+  useEffect(() => {
+    setFeedback("none");
+    setStudentSaid("");
+    setTeacherMessage(pageData.teacherAudioMock);
+    speakText(pageData.teacherAudioMock);
+
+    return () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (audioCtxRef.current) audioCtxRef.current.close().catch(() => {});
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [currentPage]);
+
+  const saveProgress = async (word: string) => {
+    try {
+      const letra = word[0].toUpperCase();
+      const silaba = word.slice(0, 2).toUpperCase();
+      await fetch('/api/progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          letra,
+          silaba,
+          palavraLida: true,
+          minutos: 1
+        })
+      });
+    } catch (e) {
+      console.warn("Progresso salvo localmente:", e);
+    }
+  };
+
+  const handleSpeechResult = (transcript: string) => {
+    if (handledRef.current) return;
+    handledRef.current = true;
+    setIsRecording(false);
+    setIsProcessing(false);
+
+    const clean = transcript.trim().toUpperCase();
+    setStudentSaid(clean || "...");
+
+    const target = pageData.targetWord.toUpperCase();
+    const isMatch = phoneticMatch(clean, target);
+
+    if (isMatch) {
+      setFeedback("success");
+      setScore(prev => prev + 100);
+      setTeacherMessage(`Incrível! Você leu perfeitamente: ${target} (${pageData.syllables})! Clique em Avançar.`);
+      speakText(`Incrível! Você leu perfeitamente: ${target}! Muito bem!`);
+      saveProgress(target);
+    } else {
+      setFeedback("retry");
+      const heardMsg = clean ? `Eu ouvi "${clean}". ` : "O som ficou baixinho. ";
+      setTeacherMessage(`${heardMsg}Vamos tentar de novo? Fale apenas a palavra destacada: ${target} (${pageData.syllables}).`);
+      speakText(`Quase lá! Fale comigo: ${pageData.syllables}. ${target}!`);
+    }
+  };
+
+  const stopAllCapture = () => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try { mediaRecorderRef.current.stop(); } catch {}
+    }
+  };
+
+  const toggleRecording = async () => {
+    if (isRecording) {
+      setIsRecording(false);
+      setIsProcessing(true);
+      stopAllCapture();
+      return;
+    }
+
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
+
+    setFeedback("none");
+    setStudentSaid("");
+    handledRef.current = false;
+
+    // Pequena pausa para garantir que o áudio do professor parou de sair na caixa de som
+    await new Promise((r) => setTimeout(r, 150));
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      streamRef.current = stream;
+
+      let chosenMime = "audio/webm";
+      if (typeof MediaRecorder !== "undefined") {
+        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) chosenMime = "audio/webm;codecs=opus";
+        else if (MediaRecorder.isTypeSupported("audio/mp4")) chosenMime = "audio/mp4";
+        else if (MediaRecorder.isTypeSupported("audio/ogg")) chosenMime = "audio/ogg";
+      }
+
+      const mr = new MediaRecorder(stream, { mimeType: chosenMime });
+      mediaRecorderRef.current = mr;
+      audioChunksRef.current = [];
+
+      mr.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) audioChunksRef.current.push(ev.data);
+      };
+
+      mr.onstop = async () => {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
+        }
+        if (handledRef.current) return;
+
+        const actualMime = chosenMime.split(";")[0].trim() || "audio/webm";
+        const blob = new Blob(audioChunksRef.current, { type: actualMime });
+        if (blob.size < 350) {
+          handleSpeechResult("");
+          return;
+        }
+
+        try {
+          setIsProcessing(true);
+          const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://alfabetiza-ai-production.up.railway.app";
+          const token = await getToken();
+          const formData = new FormData();
+          const ext = actualMime.includes("mp4") ? "mp4" : actualMime.includes("ogg") ? "ogg" : "webm";
+          formData.append("audio_file", blob, `lesson.${ext}`);
+          formData.append("target_hint", pageData.targetWord);
+
+          const res = await fetch(`${API_URL}/api/voice/transcribe`, {
+            method: "POST",
+            body: formData,
+            headers: { Authorization: `Bearer ${token}` },
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            handleSpeechResult(data.text || "");
+            return;
+          }
+        } catch (err) {
+          console.warn("Erro na transcrição:", err);
+        }
+
+        handleSpeechResult("");
+      };
+
+      mr.start();
+      setIsRecording(true);
+
+      // VAD: Detecta início da fala e encerra automaticamente após 1.4s de silêncio pós-fala
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioCtxRef.current = audioCtx;
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      let hasSpoken = false;
+      let silenceStart: number | null = null;
+      const recordStart = Date.now();
+
+      const checkLevel = () => {
+        if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") return;
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        const avg = sum / dataArray.length;
+
+        if (avg > 16) {
+          hasSpoken = true;
+          silenceStart = null;
+        } else if (hasSpoken) {
+          if (!silenceStart) silenceStart = Date.now();
+          if (Date.now() - silenceStart > 1400) {
+            setIsRecording(false);
+            setIsProcessing(true);
+            stopAllCapture();
+            return;
+          }
+        } else if (Date.now() - recordStart > 8000) {
+          setIsRecording(false);
+          setIsProcessing(true);
+          stopAllCapture();
+          return;
+        }
+        rafRef.current = requestAnimationFrame(checkLevel);
+      };
+      checkLevel();
+    } catch (err) {
+      console.error("Erro ao acessar microfone:", err);
+      alert("Permissão de microfone necessária para praticar a leitura!");
+    }
+  };
+
+  const nextPage = () => {
+    if (currentPage < LESSON_PAGES.length - 1) {
+      setCurrentPage(prev => prev + 1);
+    } else {
+      setCurrentPage(0);
+    }
+  };
+
+  const prevPage = () => {
+    if (currentPage > 0) {
+      setCurrentPage(prev => prev - 1);
+    }
+  };
+
+
+  return (
+    <div className="min-h-screen bg-sky-50 flex flex-col font-sans overflow-hidden">
+      {/* Top Navbar / Progress */}
+      <header className="bg-white px-6 py-4 shadow-sm flex items-center justify-between shrink-0 relative z-10">
+        <div className="flex items-center gap-4">
+          <Link 
+            href="/sala" 
+            className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200 transition-colors"
+            title="Voltar para a Sala"
+          >
+            <ArrowLeft size={20} />
+          </Link>
+          <div>
+            <h1 className="font-bold text-slate-800 text-lg">{pageData.title}</h1>
+            <span className="text-xs font-bold text-sky-500 uppercase tracking-widest">{pageData.module}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 md:gap-6">
+          <div className="flex items-center gap-2 bg-amber-100 px-4 py-2 rounded-full border border-amber-200">
+            <Star className="text-amber-500 fill-amber-500" size={18} />
+            <span className="font-black text-amber-700">{score} XP</span>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={prevPage}
+              disabled={currentPage === 0}
+              className="p-1.5 rounded-full bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-600 transition-colors cursor-pointer"
+              title="Lição anterior"
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <div className="w-24 md:w-32 h-3 bg-slate-100 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-sky-500 rounded-full transition-all duration-500"
+                style={{ width: `${((currentPage + 1) / LESSON_PAGES.length) * 100}%` }}
+              />
+            </div>
+            <span className="text-sm font-bold text-slate-500">{currentPage + 1}/{LESSON_PAGES.length}</span>
+            <button
+              type="button"
+              onClick={nextPage}
+              className="p-1.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors cursor-pointer"
+              title="Próxima lição"
+            >
+              <ArrowRight size={16} />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Learning Area */}
+      <main className="flex-1 max-w-6xl w-full mx-auto p-6 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 relative">
+        
+        {/* Digital Book (Center Stage) */}
+        <div className="lg:col-span-8 flex flex-col">
+          <AnimatePresence mode="wait">
+            <motion.div 
+              key={currentPage}
+              initial={{ opacity: 0, x: 50, scale: 0.95 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: -50, scale: 0.95 }}
+              transition={{ duration: 0.4, type: "spring" }}
+              className="bg-white rounded-[2.5rem] p-4 shadow-xl border-4 border-slate-100 flex-1 flex flex-col overflow-hidden relative"
+            >
+              {/* Image / Illustration */}
+              <div className="w-full h-[38vh] md:h-[46vh] rounded-[2rem] overflow-hidden relative bg-slate-100">
+                <img 
+                  src={pageData.image} 
+                  alt="Ilustração do Livro" 
+                  className="w-full h-full object-cover"
+                />
+                
+                {/* Visual Feedback Overlays */}
+                <AnimatePresence>
+                  {feedback === "success" && (
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.5 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute inset-0 bg-green-500/20 backdrop-blur-sm flex items-center justify-center z-20"
+                    >
+                      <motion.div 
+                        initial={{ y: 20 }}
+                        animate={{ y: 0 }}
+                        className="bg-white px-8 py-6 rounded-3xl shadow-2xl flex flex-col items-center"
+                      >
+                        <Trophy className="text-yellow-500 fill-yellow-400 w-24 h-24 mb-4" />
+                        <span className="text-3xl font-black text-green-600">Perfeito!</span>
+                      </motion.div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              {/* Text to Read & Syllables */}
+              <div className="flex-1 flex flex-col items-center justify-center p-6 gap-4">
+                <h2 className="text-4xl md:text-6xl font-black text-slate-800 text-center tracking-tight leading-tight">
+                  {pageData.text.split(' ').map((word, i) => (
+                    <span 
+                      key={i} 
+                      className={`inline-block mx-2 ${
+                        word === pageData.targetWord 
+                          ? feedback === "success" 
+                            ? "text-green-500" 
+                            : "text-sky-500 underline decoration-sky-300 decoration-4 underline-offset-8"
+                          : ""
+                      }`}
+                    >
+                      {word}
+                    </span>
+                  ))}
+                </h2>
+
+                <button
+                  type="button"
+                  onClick={() => speakText(`${pageData.syllables.replace(/-/g, "... ")}. ${pageData.targetWord}!`)}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 font-black text-lg transition-all cursor-pointer active:scale-95"
+                >
+                  <Volume2 size={20} className="text-sky-500" />
+                  <span>Sílabas: {pageData.syllables}</span>
+                </button>
+              </div>
+            </motion.div>
+          </AnimatePresence>
+        </div>
+
+        {/* AI Tutor / Mascot Sidebar */}
+        <div className="lg:col-span-4 flex flex-col gap-6">
+          {/* Mascot / Avatar Area */}
+          <div className="bg-white rounded-[2.5rem] p-6 shadow-lg border-4 border-slate-100 flex-1 flex flex-col items-center justify-center relative overflow-hidden">
+            {/* Pulsing background when speaking */}
+            <AnimatePresence>
+              {isSpeaking && (
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1.2 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                  className="absolute inset-0 bg-sky-100 rounded-full blur-3xl -z-10"
+                />
+              )}
+            </AnimatePresence>
+
+            {/* Simple CSS Mascot Avatar */}
+            <motion.div 
+              animate={{ 
+                y: isSpeaking ? [0, -10, 0] : 0,
+                rotate: isSpeaking ? [0, 5, -5, 0] : 0
+              }}
+              transition={{ repeat: Infinity, duration: 2 }}
+              className="w-40 h-40 md:w-48 md:h-48 rounded-full border-8 border-sky-400 bg-sky-200 flex items-center justify-center relative shadow-inner mb-6"
+            >
+              {/* Eyes */}
+              <div className="absolute top-12 left-10 w-8 h-8 bg-slate-800 rounded-full overflow-hidden">
+                <motion.div 
+                  animate={{ y: [0, 8, 0] }} 
+                  transition={{ repeat: Infinity, duration: 4, times: [0, 0.1, 0.2] }}
+                  className="w-full h-full bg-sky-200 absolute -top-8" 
+                />
+                <div className="w-3 h-3 bg-white rounded-full absolute top-1 right-1" />
+              </div>
+              <div className="absolute top-12 right-10 w-8 h-8 bg-slate-800 rounded-full overflow-hidden">
+                <motion.div 
+                  animate={{ y: [0, 8, 0] }} 
+                  transition={{ repeat: Infinity, duration: 4, times: [0, 0.1, 0.2] }}
+                  className="w-full h-full bg-sky-200 absolute -top-8" 
+                />
+                <div className="w-3 h-3 bg-white rounded-full absolute top-1 left-1" />
+              </div>
+
+              {/* Mouth */}
+              <motion.div 
+                animate={
+                  isSpeaking 
+                    ? { height: [12, 32, 16, 40, 12], width: [32, 28, 36, 24, 32], borderRadius: ["16px", "24px", "16px"] }
+                    : feedback === "success" 
+                      ? { height: 24, width: 48, borderRadius: "0 0 24px 24px" }
+                      : { height: 12, width: 32, borderRadius: "16px" }
+                }
+                transition={isSpeaking ? { repeat: Infinity, duration: 0.6 } : {}}
+                className="absolute bottom-12 w-8 h-3 bg-rose-500 rounded-full shadow-inner overflow-hidden"
+              >
+                {isSpeaking && <div className="absolute bottom-0 w-full h-1/2 bg-rose-700 rounded-t-full" />}
+              </motion.div>
+            </motion.div>
+
+            {/* Speech Bubble */}
+            <AnimatePresence mode="wait">
+              <motion.div 
+                key={teacherMessage || pageData.teacherAudioMock}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="bg-slate-800 text-white p-5 rounded-3xl rounded-tl-none relative shadow-xl text-center"
+              >
+                <p className="font-medium text-lg leading-relaxed">"{teacherMessage || pageData.teacherAudioMock}"</p>
+                {isSpeaking && (
+                  <div className="absolute -top-3 -right-3 bg-sky-500 w-8 h-8 rounded-full flex items-center justify-center animate-pulse shadow-lg">
+                    <Volume2 size={16} className="text-white" />
+                  </div>
+                )}
+              </motion.div>
+            </AnimatePresence>
+
+            {studentSaid && (
+              <div className="mt-3 bg-slate-100 border border-slate-200 px-4 py-2 rounded-2xl text-center">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Você falou:</span>
+                <span className="text-base font-black text-slate-800">{studentSaid}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Controls */}
+          <div className="bg-white rounded-[2.5rem] p-6 shadow-lg border-4 border-slate-100 flex flex-col items-center justify-center gap-3 shrink-0">
+            {feedback === "success" ? (
+              <motion.button
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                onClick={nextPage}
+                className="w-full bg-green-500 hover:bg-green-600 text-white font-black text-xl py-6 rounded-3xl shadow-[0_8px_0_rgb(21,128,61)] active:translate-y-2 active:shadow-none transition-all flex items-center justify-center gap-3 cursor-pointer"
+              >
+                {currentPage < LESSON_PAGES.length - 1 ? "Próxima Palavra" : "Recomeçar Livro"} <ArrowRight size={28} />
+              </motion.button>
+            ) : (
+              <button
+                onClick={toggleRecording}
+                disabled={isProcessing}
+                className={`w-full font-black text-xl py-6 rounded-3xl transition-all flex flex-col items-center justify-center gap-2 relative overflow-hidden cursor-pointer ${
+                  isProcessing
+                    ? 'bg-amber-500 text-white'
+                    : isRecording 
+                    ? 'bg-rose-500 text-white shadow-none translate-y-2' 
+                    : 'bg-sky-500 hover:bg-sky-400 text-white shadow-[0_8px_0_rgb(2,132,199)] active:translate-y-2 active:shadow-none'
+                }`}
+              >
+                {isProcessing ? (
+                  <>
+                    <Loader2 size={32} className="animate-spin" />
+                    <span>Avaliando sua voz...</span>
+                  </>
+                ) : isRecording ? (
+                  <>
+                    <motion.div 
+                      animate={{ scale: [1, 1.5, 1] }} 
+                      transition={{ repeat: Infinity, duration: 1.5 }}
+                      className="absolute inset-0 bg-rose-600 rounded-3xl -z-10"
+                    />
+                    <Square size={32} className="fill-white" />
+                    <span>Ouvindo... Clique para Enviar</span>
+                  </>
+                ) : (
+                  <>
+                    <Mic size={36} className="" />
+                    <span>Aperte para Falar</span>
+                  </>
+                )}
+              </button>
+            )}
+            
+            {feedback === "retry" && !isRecording && !isProcessing && (
+              <button
+                type="button"
+                onClick={nextPage}
+                className="text-sky-600 hover:text-sky-800 text-sm font-bold underline cursor-pointer mt-1"
+              >
+                Pular para a próxima palavra →
+              </button>
+            )}
+
+            {!isRecording && !isProcessing && feedback === "none" && (
+              <p className="text-slate-400 text-sm font-bold text-center mt-1">
+                Fale a palavra sublinhada e clique para enviar!
+              </p>
+            )}
+          </div>
+        </div>
+
+      </main>
+    </div>
+  );
+}
+
+
+--- ARQUIVO: frontend/src/app/globals.css (26 linhas) ---
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+
+--- ARQUIVO: frontend/src/app/layout.tsx (37 linhas) ---
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
+import { ptBR } from "@clerk/localizations";
+import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "Alfabetiza AÍ - Aprenda a ler com Inteligência Artificial",
+  description: "Alfabetização inteligente com comando de voz para Crianças, EJA e PCD.",
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <ClerkProvider localization={ptBR}>
+      <html
+        lang="pt-BR"
+        className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      >
+        <body className="min-h-full flex flex-col">{children}</body>
+      </html>
+    </ClerkProvider>
+  );
+}
+
+
+--- ARQUIVO: frontend/src/app/login/page.tsx (74 linhas) ---
+'use client'
+
+import { SignIn } from '@clerk/nextjs'
+import Link from 'next/link'
+import { BookOpen, ArrowLeft } from 'lucide-react'
+
+export default function LoginPage() {
+  return (
+    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-[#FAF9F6] font-sans text-slate-800">
+      {/* LEFT */}
+      <div className="hidden lg:flex lg:col-span-5 relative bg-blue-950 p-12 flex-col justify-between overflow-hidden">
+        {/* Imagem de Fundo (Opcional, com overlay escuro) */}
+        <div className="absolute inset-0 opacity-20 mix-blend-overlay">
+          <img 
+            src="https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop" 
+            alt="Fundo escola"
+            className="w-full h-full object-cover grayscale"
+          />
+        </div>
+
+        <div className="relative z-10 flex items-center gap-3">
+          <div className="w-10 h-10 bg-white/10 rounded-lg flex items-center justify-center backdrop-blur-sm">
+            <BookOpen className="w-5 h-5 text-amber-500" />
+          </div>
+          <span className="font-serif text-white text-2xl font-bold tracking-tight">
+            Alfabetiza<span className="text-amber-500">AÍ</span>
+          </span>
+        </div>
+
+        <div className="relative z-10 space-y-6 my-auto max-w-sm">
+          <h2 className="text-4xl font-serif font-bold text-white leading-tight">
+            Bem-vindo à sala de aula do futuro.
+          </h2>
+          <p className="text-blue-100/80 text-base leading-relaxed font-medium">
+            Acompanhe o desenvolvimento da leitura com a ajuda de uma inteligência artificial criada para o ritmo de cada criança.
+          </p>
+        </div>
+
+        <div className="relative z-10 text-xs text-blue-200/50 pt-6">
+          © {new Date().getFullYear()} AÍ Tecnologia e Educação.
+        </div>
+      </div>
+
+      {/* RIGHT */}
+      <div className="lg:col-span-7 flex flex-col justify-between p-6 sm:p-12">
+        <div className="flex items-center justify-between mb-8">
+          <Link href="/" className="inline-flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-blue-900 transition-colors">
+            <ArrowLeft className="w-4 h-4" /> Voltar para o início
+          </Link>
+        </div>
+
+        <div className="w-full max-w-md mx-auto my-auto flex justify-center py-6">
+          <SignIn
+            routing="hash"
+            forceRedirectUrl="/onboarding"
+            fallbackRedirectUrl="/onboarding"
+            appearance={{
+              elements: {
+                rootBox: "w-full",
+                card: "shadow-2xl shadow-blue-900/5 border border-slate-200 rounded-3xl w-full",
+                headerTitle: "font-serif text-2xl font-bold text-blue-950",
+                headerSubtitle: "text-slate-500",
+                socialButtonsBlockButton: "rounded-xl border-slate-200",
+                formButtonPrimary: "bg-blue-900 hover:bg-blue-800 rounded-xl",
+                footer: "hidden",
+              }
+            }}
+          />
+        </div>
+        <div />
+      </div>
+    </div>
+  )
+}
+
+
+--- ARQUIVO: frontend/src/app/onboarding/page.tsx (141 linhas) ---
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { useUser } from '@clerk/nextjs'
+import { Sparkles, Users, Accessibility, ArrowRight, BookOpen } from 'lucide-react'
+
+export default function OnboardingPage() {
+  const router = useRouter()
+  const { user } = useUser()
+  const [loading, setLoading] = useState(false)
+  const [selectedProfile, setSelectedProfile] = useState<string | null>(null)
+  const [lgpdAccepted, setLgpdAccepted] = useState(false)
+  const [ageAccepted, setAgeAccepted] = useState(false)
+
+  useEffect(() => {
+    try {
+      const savedPerfil = localStorage.getItem('alfabetiza_perfil') || (user?.unsafeMetadata?.perfil as string | undefined)
+      if (savedPerfil && ['KIDS', 'EJA', 'PCD'].includes(savedPerfil)) {
+        router.replace(`/sala?perfil=${savedPerfil}`)
+      }
+    } catch {}
+  }, [user, router])
+  
+  const profiles = [
+    {
+      id: 'KIDS',
+      title: 'Modo Criança',
+      subtitle: '5 a 8 anos',
+      icon: <Sparkles className="w-8 h-8 text-sky-500" />,
+      color: 'border-sky-200 hover:border-sky-500 bg-sky-50',
+      activeColor: 'border-sky-500 ring-2 ring-sky-500 bg-sky-100',
+    },
+    {
+      id: 'EJA',
+      title: 'Modo Adulto (EJA)',
+      subtitle: 'Jovens e adultos',
+      icon: <Users className="w-8 h-8 text-slate-700" />,
+      color: 'border-slate-200 hover:border-slate-500 bg-slate-50',
+      activeColor: 'border-slate-500 ring-2 ring-slate-500 bg-slate-200',
+    },
+    {
+      id: 'PCD',
+      title: 'Modo Inclusão',
+      subtitle: 'TEA, TDAH, Dislexia',
+      icon: <Accessibility className="w-8 h-8 text-teal-600" />,
+      color: 'border-teal-200 hover:border-teal-500 bg-teal-50',
+      activeColor: 'border-teal-500 ring-2 ring-teal-500 bg-teal-100',
+    }
+  ]
+
+  async function handleFinish() {
+    if (!selectedProfile) return
+    setLoading(true)
+
+    // 1. Persistência instantânea local e cookie
+    try {
+      localStorage.setItem('alfabetiza_perfil', selectedProfile)
+      document.cookie = `alfabetiza_perfil=${selectedProfile}; path=/; max-age=31536000`
+    } catch {}
+
+    // 2. Persiste no PostgreSQL do Railway via API
+    try {
+      await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ perfil: selectedProfile }),
+      })
+    } catch (e) {
+      console.warn('[Onboarding] Fallback ao gravar no banco:', e)
+    }
+
+    // 3. Atualiza metadata do usuário no Clerk se disponível
+    try {
+      if (user) {
+        await user.update({
+          unsafeMetadata: { perfil: selectedProfile }
+        })
+      }
+    } catch {}
+
+    // 4. Redireciona para a Sala de Leitura
+    router.push('/sala?perfil=' + selectedProfile)
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gray-50 font-sans">
+      <div className="w-full max-w-2xl bg-white rounded-3xl p-8 sm:p-12 shadow-xl border border-gray-100 text-center">
+        
+        <div className="w-16 h-16 bg-sky-100 rounded-2xl flex items-center justify-center mx-auto mb-6 text-sky-600">
+          <BookOpen className="w-8 h-8" />
+        </div>
+        
+        <h1 className="text-3xl font-black text-gray-950 mb-3">Quem vai aprender a ler?</h1>
+        <p className="text-gray-500 mb-8 text-sm">
+          A IA vai adaptar o tom da voz, o ritmo e o visual para você.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          {profiles.map((p) => {
+            const isSelected = selectedProfile === p.id
+            return (
+              <button
+                key={p.id}
+                onClick={() => setSelectedProfile(p.id)}
+                className={`flex flex-col items-center justify-center p-6 rounded-2xl border-2 transition-all cursor-pointer text-center relative overflow-hidden ${
+                  isSelected ? p.activeColor : p.color
+                }`}
+              >
+                <div className="mb-4">{p.icon}</div>
+                <h3 className="font-bold text-gray-900 text-base mb-1">{p.title}</h3>
+                <p className="text-xs text-gray-500 font-medium">{p.subtitle}</p>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="flex flex-col gap-3 text-left bg-gray-100 p-4 rounded-xl mb-6">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" className="w-5 h-5 accent-sky-600 mt-0.5" checked={ageAccepted} onChange={(e) => setAgeAccepted(e.target.checked)} />
+            <span className="text-sm text-gray-700 font-medium">Confirmo que sou maior de 18 anos ou o responsável legal.</span>
+          </label>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" className="w-5 h-5 accent-sky-600 mt-0.5" checked={lgpdAccepted} onChange={(e) => setLgpdAccepted(e.target.checked)} />
+            <span className="text-sm text-gray-700 font-medium">Li e aceito os termos da LGPD (Lei Geral de Proteção de Dados) para o processamento educacional.</span>
+          </label>
+        </div>
+
+        <button
+          disabled={!selectedProfile || loading || !ageAccepted || !lgpdAccepted}
+          onClick={handleFinish}
+          className="w-full py-4 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-base shadow-lg shadow-sky-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 cursor-pointer"
+        >
+          {loading ? 'Preparando sua sala...' : 'Começar a Aprender'}
+          <ArrowRight className="w-5 h-5" />
+        </button>
+
+      </div>
+    </div>
+  )
+}
+
+
+--- ARQUIVO: frontend/src/app/pagamento/page.tsx (169 linhas) ---
+'use client'
+
+import { useState } from 'react'
+import Link from 'next/link'
+import { Sparkles, Check, ArrowLeft, ShieldCheck, Heart } from 'lucide-react'
+import { useUser } from '@clerk/nextjs'
+
+export default function PagamentoPage() {
+  const { isSignedIn, user } = useUser()
+  const [cycle, setCycle] = useState<'MONTHLY' | 'YEARLY'>('YEARLY')
+  const [cpf, setCpf] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [qrCode, setQrCode] = useState<string | null>(null)
+  const [payload, setPayload] = useState<string | null>(null)
+
+  const handleCheckout = async () => {
+    setError(null)
+    const cleanCpf = cpf.replace(/\D/g, '')
+    if (cleanCpf.length !== 11 && cleanCpf.length !== 14) {
+      setError('Informe um CPF ou CNPJ válido para emissão do PIX.')
+      return
+    }
+
+    if (!isSignedIn) {
+      window.location.href = '/login'
+      return
+    }
+
+    setLoading(true)
+    try {
+      const res = await fetch('/api/pagamento/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cycle, cpfCnpj: cleanCpf }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro ao gerar pagamento PIX.')
+      }
+
+      setQrCode(data.qrCode)
+      setPayload(data.payload)
+    } catch (e: any) {
+      setError(e.message || 'Erro de conexão com o servidor.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-[#FAF9F6] text-slate-900 p-6">
+      <div className="max-w-4xl mx-auto">
+        <header className="flex items-center justify-between mb-8">
+          <Link href="/sala" className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-slate-900">
+            <ArrowLeft className="size-4" /> Voltar para a Sala de Aula
+          </Link>
+          <div className="flex items-center gap-2 text-xs font-bold text-amber-700 bg-amber-100 px-3 py-1 rounded-full">
+            <Sparkles className="size-3.5" /> Acesso Família & Inclusão
+          </div>
+        </header>
+
+        <div className="max-w-2xl mx-auto bg-white border border-slate-200 rounded-3xl p-8 sm:p-12 shadow-sm">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Plano Família Alfabetiza AÍ</h1>
+            <p className="text-slate-600 text-sm mt-2">
+              Voz neural ilimitada, suporte com afeto para crianças, EJA e pessoas neurodivergentes.
+            </p>
+          </div>
+
+          {!qrCode ? (
+            <>
+              {/* Seletor Mensal / Anual */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div
+                  onClick={() => setCycle('MONTHLY')}
+                  className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                    cycle === 'MONTHLY' ? 'border-amber-600 bg-amber-50/50' : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <p className="text-xs font-bold uppercase text-slate-500 mb-1">Assinatura Mensal</p>
+                  <p className="text-2xl font-extrabold text-slate-900">R$ 24,90</p>
+                  <p className="text-xs text-slate-500 mt-1">por mês · cancele quando quiser</p>
+                </div>
+
+                <div
+                  onClick={() => setCycle('YEARLY')}
+                  className={`relative p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                    cycle === 'YEARLY' ? 'border-amber-600 bg-amber-50/60' : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <span className="absolute -top-2.5 right-3 bg-amber-600 text-white text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full shadow-sm">
+                    Mais Econômico
+                  </span>
+                  <p className="text-xs font-bold uppercase text-amber-700 mb-1">Plano Anual</p>
+                  <p className="text-2xl font-extrabold text-slate-900">R$ 147,00</p>
+                  <p className="text-xs text-emerald-600 font-bold mt-1">R$ 12,25/mês · economize 50%</p>
+                </div>
+              </div>
+
+              {/* Benefícios */}
+              <div className="bg-slate-50 rounded-2xl p-4 mb-6 border border-slate-100 space-y-2.5">
+                {[
+                  'Conversas de voz 100% ilimitadas todos os dias',
+                  'Acesso a todos os modos (KIDS, EJA e PCD)',
+                  'Mascote interativo e atividades fonéticas',
+                  'Relatórios de progresso das sílabas e palavras dominadas',
+                ].map((b) => (
+                  <div key={b} className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                    <Check className="size-4 text-emerald-600 shrink-0" />
+                    <span>{b}</span>
+                  </div>
+                ))}
+              </div>
+
+              {error && (
+                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-medium">
+                  {error}
+                </div>
+              )}
+
+              <input
+                value={cpf}
+                onChange={(e) => setCpf(e.target.value)}
+                placeholder="CPF ou CNPJ para emissão do PIX"
+                aria-label="CPF ou CNPJ"
+                inputMode="numeric"
+                className="block w-full p-3 border border-slate-300 rounded-xl text-sm mb-4 bg-white"
+              />
+
+              <button
+                onClick={handleCheckout}
+                disabled={loading}
+                className="w-full bg-amber-600 hover:bg-amber-700 text-white py-3.5 rounded-xl font-bold text-sm shadow-md transition-colors"
+              >
+                {loading ? 'Gerando PIX...' : `Assinar por R$ ${cycle === 'YEARLY' ? '147,00 (Anual)' : '24,90 (Mensal)'}`}
+              </button>
+            </>
+          ) : (
+            <div className="text-center">
+              <h2 className="text-lg font-bold text-slate-900 mb-1">Escaneie o QR Code PIX</h2>
+              <p className="text-xs text-slate-500 mb-4">
+                Abra o app do seu banco e pague via Pix Copia e Cola ou QR Code.
+              </p>
+              <img
+                src={`data:image/png;base64,${qrCode}`}
+                alt="QR Code Pix"
+                className="mx-auto w-48 h-48 border p-2 rounded-2xl mb-4 bg-white shadow-sm"
+              />
+              <textarea
+                readOnly
+                value={payload || ''}
+                rows={3}
+                className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-mono text-slate-700 mb-4"
+              />
+              <Link
+                href="/sala"
+                className="block w-full text-center bg-slate-900 text-white py-3 rounded-xl font-bold text-sm hover:bg-slate-800 transition-colors"
+              >
+                Voltar para a Aula
+              </Link>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+--- ARQUIVO: frontend/src/app/page.tsx (214 linhas) ---
+'use client'
+
+import Link from 'next/link'
+import { BookOpen, ArrowRight, CheckCircle2, Heart, Mic, Users, Shield, PlayCircle } from 'lucide-react'
+import { motion } from 'framer-motion'
+
+const fadeIn = {
+  hidden: { opacity: 0, y: 20 },
+  visible: (i: number) => ({ opacity: 1, y: 0, transition: { delay: i * 0.1, duration: 0.6 } })
+}
+
+export default function LandingPage() {
+  return (
+    <div className="min-h-screen bg-[#FAF9F6] text-slate-800 font-sans selection:bg-amber-200">
+      
+      {/* NAVBAR */}
+      <header className="sticky top-0 z-50 w-full border-b border-slate-200/50 bg-[#FAF9F6]/90 backdrop-blur-md">
+        <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-blue-900 rounded-lg flex items-center justify-center">
+              <BookOpen className="w-5 h-5 text-white" />
+            </div>
+            <span className="font-serif text-2xl font-bold tracking-tight text-blue-950">
+              Alfabetiza<span className="text-amber-600">AÍ</span>
+            </span>
+          </div>
+          <div className="flex items-center gap-4">
+            <Link href="/login">
+              <button className="px-6 py-2.5 text-sm font-semibold bg-white border border-slate-300 text-slate-700 rounded-full hover:bg-slate-50 transition-colors">
+                Área do Professor
+              </button>
+            </Link>
+            <Link href="/login">
+              <button className="px-6 py-2.5 text-sm font-semibold bg-blue-900 hover:bg-blue-800 text-white rounded-full transition-colors">
+                Entrar na Aula
+              </button>
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      {/* HERO */}
+      <section className="relative pt-20 pb-24 lg:pt-32 lg:pb-32 overflow-hidden">
+        <div className="max-w-6xl mx-auto px-6 grid lg:grid-cols-2 gap-16 items-center">
+          
+          <div className="space-y-8 max-w-2xl">
+            <motion.div initial="hidden" animate="visible" custom={0} variants={fadeIn}>
+              <div className="inline-flex items-center gap-2 bg-amber-100/50 text-amber-800 text-sm font-medium px-4 py-2 rounded-full">
+                <Heart className="w-4 h-4 text-amber-600" />
+                <span>Pedagogia aliada à Tecnologia</span>
+              </div>
+            </motion.div>
+
+            <motion.h1 initial="hidden" animate="visible" custom={1} variants={fadeIn}
+              className="text-5xl lg:text-6xl font-serif font-bold text-blue-950 leading-[1.1]">
+              Aprender a ler no <span className="italic text-amber-600">seu próprio ritmo.</span>
+            </motion.h1>
+
+            <motion.p initial="hidden" animate="visible" custom={2} variants={fadeIn}
+              className="text-lg text-slate-600 leading-relaxed font-medium">
+              Desenvolvemos uma tutoria por voz que escuta, entende e acompanha cada criança, respeitando o tempo de aprendizado humano. Construído por educadores, potencializado pela Inteligência Artificial.
+            </motion.p>
+
+            <motion.div initial="hidden" animate="visible" custom={3} variants={fadeIn}
+              className="flex flex-col sm:flex-row gap-4 pt-4">
+              <Link href="/login">
+                <button className="w-full sm:w-auto h-14 px-8 text-base rounded-full bg-blue-900 text-white hover:bg-blue-800 font-semibold flex items-center justify-center gap-2 transition-colors">
+                  Acessar Plataforma <ArrowRight className="w-5 h-5" />
+                </button>
+              </Link>
+              <a
+                href="#como-funciona"
+                onClick={(e) => {
+                  e.preventDefault()
+                  document.getElementById('como-funciona')?.scrollIntoView({ behavior: 'smooth' })
+                }}
+                className="w-full sm:w-auto h-14 px-8 text-base rounded-full bg-white border-2 border-slate-200 text-blue-950 hover:border-slate-300 font-semibold flex items-center justify-center gap-2 transition-colors"
+              >
+                <PlayCircle className="w-5 h-5 text-amber-600" /> Ver como funciona
+              </a>
+            </motion.div>
+
+            <motion.div initial="hidden" animate="visible" custom={4} variants={fadeIn}
+              className="flex flex-wrap items-center gap-6 text-sm text-slate-500 font-medium pt-4">
+              <span className="flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-emerald-600" /> 100% por voz</span>
+              <span className="flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-emerald-600" /> Ambiente Seguro</span>
+              <span className="flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-emerald-600" /> Relatórios para Educadores</span>
+            </motion.div>
+          </div>
+
+          <motion.div initial="hidden" animate="visible" custom={2} variants={fadeIn} className="relative hidden lg:block">
+            {/* Espaço para foto humana real ou ilustração editorial */}
+            <div className="aspect-[4/5] rounded-3xl overflow-hidden bg-slate-200 relative">
+              <img 
+                src="https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop" 
+                alt="Criança aprendendo"
+                className="object-cover w-full h-full opacity-90"
+              />
+              <div className="absolute inset-0 bg-blue-900/10 mix-blend-multiply"></div>
+            </div>
+            
+            {/* Card flutuante para dar aquele ar de "produto real" */}
+            <div className="absolute -left-12 bottom-12 bg-white p-6 rounded-2xl shadow-xl max-w-xs border border-slate-100">
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                  <Mic className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-blue-950">"Muito bem! A letra M com A faz MA."</p>
+                  <p className="text-xs text-slate-500 mt-1">Interação em tempo real</p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+
+        </div>
+      </section>
+
+      {/* METODOLOGIA */}
+      <section id="como-funciona" className="py-24 bg-white border-y border-slate-200">
+        <div className="max-w-6xl mx-auto px-6 text-center max-w-3xl">
+          <h2 className="text-3xl lg:text-4xl font-serif font-bold text-blue-950 mb-6">Feito por pessoas, para pessoas.</h2>
+          <p className="text-lg text-slate-600 leading-relaxed">
+            Acreditamos que a tecnologia nunca vai substituir o toque humano na educação. Nossa plataforma é uma ferramenta de apoio que utiliza o que há de mais moderno em IA para escalar o cuidado, a paciência e a atenção individualizada.
+          </p>
+        </div>
+      </section>
+
+      {/* PLANOS E PREÇOS */}
+      <section className="py-20 bg-[#FAF9F6] border-b border-slate-200">
+        <div className="max-w-5xl mx-auto px-6">
+          <div className="text-center max-w-2xl mx-auto mb-12">
+            <h2 className="text-3xl lg:text-4xl font-serif font-bold text-blue-950 mb-3">Planos simples para toda a família</h2>
+            <p className="text-slate-600 text-sm">Comece gratuitamente ou tenha voz ilimitada com acompanhamento de progresso.</p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
+            {/* Grátis */}
+            <div className="bg-white border-2 border-slate-200 rounded-3xl p-8 flex flex-col justify-between">
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Degustação</span>
+                <h3 className="text-2xl font-bold text-blue-950 mt-1">Plano Gratuito</h3>
+                <p className="text-3xl font-bold text-slate-900 mt-2">R$ 0</p>
+                <p className="text-xs text-slate-500 mt-0.5">10 conversas de voz por dia</p>
+                <ul className="mt-6 space-y-3">
+                  {['10 conversas de voz diárias', 'Acesso aos 3 modos (KIDS, EJA e PCD)', 'Modo Mãos-Livres (VAD)', 'Sem necessidade de cartão'].map(f => (
+                    <li key={f} className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                      <span className="text-emerald-600 font-bold">✓</span> {f}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <Link href="/onboarding" className="mt-8 block w-full text-center bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold py-3 rounded-xl text-sm transition-colors">
+                Começar Grátis
+              </Link>
+            </div>
+
+            {/* Plano Família */}
+            <div className="bg-white border-2 border-amber-500 rounded-3xl p-8 flex flex-col justify-between relative shadow-lg shadow-amber-500/10">
+              <span className="absolute -top-3 right-6 bg-amber-600 text-white text-[10px] font-extrabold uppercase px-3 py-1 rounded-full shadow-sm">
+                Recomendado
+              </span>
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-amber-700">Acesso Completo</span>
+                <h3 className="text-2xl font-bold text-blue-950 mt-1">Plano Família</h3>
+                <p className="text-3xl font-bold text-slate-900 mt-2">R$ 24,90 <span className="text-xs text-slate-500 font-normal">/mês</span></p>
+                <p className="text-xs text-emerald-600 font-bold mt-0.5">ou R$ 147,00 no plano anual (-50%)</p>
+                <ul className="mt-6 space-y-3">
+                  {['Conversas de voz 100% ILIMITADAS', 'Mascote interativo e atividades fonéticas', 'Relatório fonético (sílabas e letras aprendidas)', 'Suporte prioritário e inclusão PCD dedicada'].map(f => (
+                    <li key={f} className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                      <span className="text-amber-600 font-bold">✓</span> {f}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <Link href="/pagamento" className="mt-8 block w-full text-center bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl text-sm shadow-md transition-colors">
+                Assinar Plano Família
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* FOOTER */}
+      <footer className="bg-[#FAF9F6] py-12">
+        <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
+          <div className="flex flex-col md:flex-row items-center gap-6">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center text-white">
+                <BookOpen className="w-4 h-4" />
+              </div>
+              <span className="font-serif font-bold text-blue-950 text-xl">Alfabetiza<span className="text-amber-600">AÍ</span></span>
+            </div>
+            <div className="flex items-center gap-4 text-sm font-medium text-slate-500">
+              <Link href="/termos" className="hover:text-blue-900 transition-colors">Termos de Uso</Link>
+              <Link href="/privacidade" className="hover:text-blue-900 transition-colors">Privacidade</Link>
+            </div>
+          </div>
+          <p className="text-slate-500 text-sm font-medium">© {new Date().getFullYear()} AÍ Tecnologia e Educação. Todos os direitos reservados.</p>
+        </div>
+      </footer>
+
+{/* Disclaimer CDC */}
+<div className="w-full bg-gray-900 text-gray-400 py-6 text-center text-xs px-4">
+  <p className="max-w-4xl mx-auto">
+    Aviso Legal: Esta plataforma é uma ferramenta de <strong>assistência pedagógica baseada em Inteligência Artificial</strong>. 
+    Não garantimos resultados acadêmicos absolutos, notas ou aprovação automática. O uso das ferramentas requer supervisão 
+    do educador ou responsável legal.
+  </p>
+</div>
+
+    </div>
+  )
+}
+
+
+--- ARQUIVO: frontend/src/app/privacidade/page.tsx (55 linhas) ---
+import React from 'react';
+
+export default function TermosPrivacidadePage() {
+  return (
+    <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-3xl mx-auto bg-white p-8 rounded-xl shadow-sm border border-gray-100 prose prose-blue">
+        <h1>Termos de Uso e Política de Privacidade</h1>
+        <p><em>Última atualização: Outubro de 2026</em></p>
+        <p>Estes Termos de Uso e Política de Privacidade regem o acesso e uso das plataformas educacionais. Ao marcar a caixa de concordância no momento do cadastro, você expressa seu consentimento livre, expresso e informado com estas regras.</p>
+        
+        <h2>PARTE I: TERMOS DE USO</h2>
+        
+        <h3>1. Natureza do Serviço</h3>
+        <p>A Plataforma é uma ferramenta de <strong>assistência pedagógica baseada em Inteligência Artificial</strong>. Ela <strong>não substitui</strong> o julgamento humano, a avaliação profissional do educador ou a responsabilidade legal da instituição de ensino. Toda sugestão (notas, planos de aula, diagnósticos) fornecida pela IA é considerada um <strong>rascunho</strong> e requer validação expressa do educador responsável.</p>
+        
+        <h3>2. Responsabilidade sobre Direitos Autorais (Lei 9.610/98)</h3>
+        <p>Ao realizar upload de materiais (PDFs, livros, textos, imagens), o Usuário declara ter os direitos autorais necessários ou a devida licença de uso para fins educacionais. A Plataforma não se responsabiliza por infrações de direitos autorais cometidas pelos usuários e não utiliza obras protegidas de terceiros para o treinamento de modelos fundacionais próprios.</p>
+        
+        <h3>3. Idade Mínima e Capacidade Legal</h3>
+        <p>Em conformidade com o Estatuto da Criança e do Adolescente (Lei 8.069/90 e Lei 15.211/2025 - ECA Digital), o uso direto da Plataforma por menores de 18 anos exige a supervisão e o consentimento expresso de pais ou responsáveis legais, declarado obrigatoriamente no ato do cadastro.</p>
+        
+        <h2>PARTE II: POLÍTICA DE PRIVACIDADE (LGPD)</h2>
+        <p>Em conformidade com a Lei Geral de Proteção de Dados (Lei 13.709/2018).</p>
+        
+        <h3>1. Papéis e Responsabilidades</h3>
+        <ul>
+          <li><strong>Controlador de Dados:</strong> A Instituição de Ensino ou o Educador (cliente contratante), que decide quais dados serão inseridos na Plataforma.</li>
+          <li><strong>Operador de Dados:</strong> A Plataforma, que processa os dados estritamente sob as diretrizes do Controlador e destes Termos.</li>
+        </ul>
+        
+        <h3>2. Coleta e Minimização de Dados</h3>
+        <p>Coletamos apenas os dados estritamente necessários para o funcionamento pedagógico:</p>
+        <ul>
+          <li><strong>Educadores:</strong> Nome, e-mail, instituição.</li>
+          <li><strong>Alunos:</strong> Recomendamos o uso exclusivo de identificadores anônimos (ex: "Aluno A", "ID 123"). Caso nomes sejam fornecidos, a Plataforma aplica anonimização sistêmica automática (substituição de PIIs) antes do processamento por Inteligência Artificial.</li>
+        </ul>
+        
+        <h3>3. Dados Sensíveis e de Menores (ECA/LGPD)</h3>
+        <p>A Plataforma não coleta biometria persistente. Arquivos de voz são processados de forma volátil (<em>on-the-fly</em>) para transcrição e imediatamente deletados dos nossos servidores, não havendo armazenamento permanente.</p>
+        
+        <h3>4. Compartilhamento com Terceiros e Transferência Internacional</h3>
+        <p>Para fornecer as funcionalidades de IA, utilizamos APIs de terceiros (ex: OpenAI, Groq). O compartilhamento ocorre sob protocolos de anonimização prévia. Possuímos acordos de <em>Zero Data Retention</em> com estes parceiros, garantindo que os dados acadêmicos dos usuários <strong>não sejam utilizados para o treinamento de novos modelos de IA</strong>.</p>
+        
+        <h3>5. Retenção e Exclusão de Dados</h3>
+        <p>Por segurança e para evitar a manutenção indefinida de histórico de menores, a Plataforma possui uma política de retenção limitada. Dados de desempenho acadêmico (notas, missões, planos de aula) são automaticamente apagados após 6 (seis) meses de inatividade ou ao término do ano letivo, podendo ser excluídos a qualquer momento pelo usuário através de sua conta.</p>
+        
+        <h3>6. Segurança da Informação</h3>
+        <p>Utilizamos criptografia padrão de mercado (AES-256) para armazenamento em banco de dados e isolamento de informações (<em>Row Level Security</em>), assegurando que usuários só tenham acesso aos dados de suas respectivas contas ou instituições.</p>
+        
+        <h3>7. Direitos do Titular (Art. 18, LGPD)</h3>
+        <p>Você tem direito à confirmação, acesso, correção, anonimização ou exclusão dos seus dados. Qualquer solicitação referente aos dados dos alunos deve ser intermediada pelo Educador/Instituição de Ensino (Controlador).</p>
+      </div>
+    </div>
+  );
+}
+
+
+--- ARQUIVO: frontend/src/app/sala/page.tsx (188 linhas) ---
+"use client";
+
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { UserButton } from "@clerk/nextjs";
+import VoiceRecorder from "@/components/VoiceRecorder";
+import { Smile, Brain, BookOpen } from "lucide-react";
+
+type Profile = "KIDS" | "PCD" | "EJA";
+
+function SalaContent() {
+  const searchParams = useSearchParams();
+  const queryProfile = searchParams.get('perfil') as Profile;
+  const [profile, setProfile] = useState<Profile>(queryProfile || "KIDS");
+
+  useEffect(() => {
+    if (queryProfile && ['KIDS', 'PCD', 'EJA'].includes(queryProfile)) {
+      setProfile(queryProfile);
+      try {
+        localStorage.setItem('alfabetiza_perfil', queryProfile);
+        document.cookie = `alfabetiza_perfil=${queryProfile}; path=/; max-age=31536000`;
+      } catch {}
+    } else {
+      try {
+        const saved = localStorage.getItem('alfabetiza_perfil') as Profile;
+        if (saved && ['KIDS', 'PCD', 'EJA'].includes(saved)) {
+          setProfile(saved);
+        }
+      } catch {}
+    }
+  }, [queryProfile]);
+
+  // THEME 1: Crianças (5-8 anos) - Lúdico, cores vibrantes, fontes gordinhas
+  const KidsTheme = () => (
+    <div className="flex-1 flex flex-col items-center w-full max-w-2xl mx-auto space-y-12">
+      <div className="text-center space-y-4">
+        <div className="inline-flex items-center justify-center p-4 bg-yellow-300 rounded-full shadow-lg mb-2 animate-bounce">
+          <Smile className="w-12 h-12 text-yellow-700" />
+        </div>
+        <h2 className="text-4xl md:text-5xl font-black text-sky-600 drop-shadow-sm">
+          Oi! Vamos aprender?
+        </h2>
+        <p className="text-xl text-sky-800 font-medium">Aperte o botão mágico abaixo!</p>
+      </div>
+      <VoiceRecorder profile="KIDS" animationsEnabled={true} />
+    </div>
+  );
+
+  // THEME 2: Inclusão (PCD / TEA / TDAH / Dislexia) - Baixo Estímulo, Alto Contraste, Previsível
+  const PCDTheme = () => (
+    <div className="flex-1 flex flex-col items-center w-full max-w-2xl mx-auto space-y-10">
+      <div className="text-center space-y-6 w-full bg-white p-8 rounded-2xl shadow-sm border border-teal-100">
+        <div className="flex items-center justify-center gap-4">
+          <Brain className="w-10 h-10 text-teal-600" />
+          <h2 className="text-3xl font-bold text-teal-900 tracking-wide">
+            Sala de Leitura
+          </h2>
+        </div>
+        <div className="h-1 w-full bg-teal-50 rounded-full overflow-hidden">
+          <div className="h-full w-1/3 bg-teal-400 rounded-full"></div>
+        </div>
+        <p className="text-xl text-slate-600 tracking-wide leading-relaxed font-medium">
+          Olá. Eu sou o seu assistente de voz.
+        </p>
+      </div>
+      <VoiceRecorder profile="PCD" animationsEnabled={false} />
+    </div>
+  );
+
+  // THEME 3: EJA (Jovens, Adultos e Idosos) - Maduro, Respeitoso, Letras Grandes, Estilo Bancário
+  const EJATheme = () => (
+    <div className="flex-1 flex flex-col items-center w-full max-w-2xl mx-auto space-y-10">
+      <div className="text-center space-y-4 w-full p-6 border-b border-slate-200">
+        <div className="inline-flex items-center justify-center p-3 bg-slate-800 rounded-xl mb-2">
+          <BookOpen className="w-8 h-8 text-white" />
+        </div>
+        <h2 className="text-3xl md:text-4xl font-semibold text-slate-800 tracking-tight">
+          Portal do Aluno
+        </h2>
+        <p className="text-xl text-slate-500 font-normal">
+          Pressione o microfone para ditar sua dúvida.
+        </p>
+      </div>
+      <VoiceRecorder profile="EJA" animationsEnabled={true} />
+    </div>
+  );
+
+  return (
+    <main className={`min-h-screen flex flex-col p-4 md:p-8 transition-all duration-700 ${
+      profile === "KIDS" ? "bg-[#E0F2FE] font-sans" :
+      profile === "PCD"  ? "bg-[#F8FAFC] font-sans tracking-wide" :
+                           "bg-slate-50 font-serif" // EJA Theme (Elegante e clássico)
+    }`}>
+      
+      {/* MODO DE APRENDIZADO */}
+      <header className="w-full flex justify-between items-center mb-8 overflow-x-auto pb-4 gap-4">
+        <div className="flex items-center gap-2 bg-white/50 backdrop-blur-md p-1 pl-4 rounded-full shadow-sm border border-black/5 min-w-max">
+          <span className="text-xs font-semibold text-slate-600 mr-1">Modo de Aprendizado:</span>
+          <button
+            onClick={() => {
+              setProfile("KIDS");
+              try {
+                localStorage.setItem('alfabetiza_perfil', 'KIDS');
+                document.cookie = 'alfabetiza_perfil=KIDS; path=/; max-age=31536000';
+              } catch {}
+            }}
+            className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${
+              profile === "KIDS" ? "bg-sky-500 text-white shadow-md scale-105" : "text-slate-500 hover:bg-white"
+            }`}
+          >
+            Modo Criança
+          </button>
+          <button
+            onClick={() => {
+              setProfile("PCD");
+              try {
+                localStorage.setItem('alfabetiza_perfil', 'PCD');
+                document.cookie = 'alfabetiza_perfil=PCD; path=/; max-age=31536000';
+              } catch {}
+            }}
+            className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${
+              profile === "PCD" ? "bg-teal-600 text-white shadow-md scale-105" : "text-slate-500 hover:bg-white"
+            }`}
+          >
+            Modo Inclusão
+          </button>
+          <button
+            onClick={() => {
+              setProfile("EJA");
+              try {
+                localStorage.setItem('alfabetiza_perfil', 'EJA');
+                document.cookie = 'alfabetiza_perfil=EJA; path=/; max-age=31536000';
+              } catch {}
+            }}
+            className={`px-6 py-2 rounded-full text-sm font-bold transition-all ${
+              profile === "EJA" ? "bg-slate-800 text-white shadow-md scale-105" : "text-slate-500 hover:bg-white"
+            }`}
+          >
+            Modo Adulto (EJA)
+          </button>
+        </div>
+        
+        {/* User Button, Livro Interativo & Plano Família */}
+        <div className="flex items-center gap-2">
+          <Link
+            href="/aula-interativa"
+            className="bg-sky-500 hover:bg-sky-600 text-white text-xs font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-colors whitespace-nowrap"
+          >
+            Livro Interativo 📖
+          </Link>
+          <Link
+            href="/pagamento"
+            className="bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3.5 py-1.5 rounded-full shadow-sm transition-colors whitespace-nowrap"
+          >
+            Voz Ilimitada 👑
+          </Link>
+          <div className="bg-white/50 backdrop-blur-md p-1.5 rounded-full shadow-sm border border-black/5 flex items-center justify-center">
+            <UserButton />
+          </div>
+        </div>
+      </header>
+
+      {/* RENDERIZAÇÃO DO TEMA */}
+      {profile === "KIDS" && <KidsTheme />}
+      {profile === "PCD" && <PCDTheme />}
+      {profile === "EJA" && <EJATheme />}
+
+      {/* FOOTER - AVISO LGPD / Supervisão Humana */}
+      <footer className="w-full mt-auto pt-8 pb-4 text-center">
+        <p className="text-xs text-slate-500 max-w-lg mx-auto">
+          ⚠️ <strong>Supervisão Humana:</strong> A IA atua como um assistente educacional. Qualquer análise ou diagnóstico gerado são apenas <em>sugestões</em> e exigem obrigatoriamente a validação de um educador responsável.
+        </p>
+      </footer>
+
+
+    </main>
+  );
+}
+
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50 text-sky-600">Carregando Sala...</div>}>
+      <SalaContent />
+    </Suspense>
+  )
+}
+
+
+--- ARQUIVO: frontend/src/app/signup/page.tsx (74 linhas) ---
+'use client'
+
+import { SignUp } from '@clerk/nextjs'
+import Link from 'next/link'
+import { BookOpen, ArrowLeft } from 'lucide-react'
+
+export default function SignupPage() {
+  return (
+    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-[#FAF9F6] font-sans text-slate-800">
+      {/* LEFT */}
+      <div className="hidden lg:flex lg:col-span-5 relative bg-blue-950 p-12 flex-col justify-between overflow-hidden">
+        {/* Imagem de Fundo (Opcional, com overlay escuro) */}
+        <div className="absolute inset-0 opacity-20 mix-blend-overlay">
+          <img 
+            src="https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop" 
+            alt="Fundo escola"
+            className="w-full h-full object-cover grayscale"
+          />
+        </div>
+
+        <div className="relative z-10 flex items-center gap-3">
+          <div className="w-10 h-10 bg-white/10 rounded-lg flex items-center justify-center backdrop-blur-sm">
+            <BookOpen className="w-5 h-5 text-amber-500" />
+          </div>
+          <span className="font-serif text-white text-2xl font-bold tracking-tight">
+            Alfabetiza<span className="text-amber-500">AÍ</span>
+          </span>
+        </div>
+
+        <div className="relative z-10 space-y-6 my-auto max-w-sm">
+          <h2 className="text-4xl font-serif font-bold text-white leading-tight">
+            A leitura começa com um "Oi".
+          </h2>
+          <p className="text-blue-100/80 text-base leading-relaxed font-medium">
+            Crie sua conta e permita que nossa IA acompanhe a jornada de aprendizado do zero à primeira palavra.
+          </p>
+        </div>
+
+        <div className="relative z-10 text-xs text-blue-200/50 pt-6">
+          © {new Date().getFullYear()} AÍ Tecnologia e Educação.
+        </div>
+      </div>
+
+      {/* RIGHT */}
+      <div className="lg:col-span-7 flex flex-col justify-between p-6 sm:p-12">
+        <div className="flex items-center justify-between mb-8">
+          <Link href="/" className="inline-flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-blue-900 transition-colors">
+            <ArrowLeft className="w-4 h-4" /> Voltar para o início
+          </Link>
+        </div>
+
+        <div className="w-full max-w-md mx-auto my-auto flex justify-center py-6">
+          <SignUp
+            routing="hash"
+            signInUrl="/login"
+            forceRedirectUrl="/onboarding"
+            fallbackRedirectUrl="/onboarding"
+            appearance={{
+              elements: {
+                rootBox: "w-full",
+                card: "shadow-2xl shadow-blue-900/5 border border-slate-200 rounded-3xl w-full",
+                headerTitle: "font-serif text-2xl font-bold text-blue-950",
+                headerSubtitle: "text-slate-500",
+                socialButtonsBlockButton: "rounded-xl border-slate-200",
+                formButtonPrimary: "bg-blue-900 hover:bg-blue-800 rounded-xl",
+              }
+            }}
+          />
+        </div>
+        <div />
+      </div>
+    </div>
+  )
+}
+
+
+--- ARQUIVO: frontend/src/app/termos/page.tsx (55 linhas) ---
+import React from 'react';
+
+export default function TermosPrivacidadePage() {
+  return (
+    <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-3xl mx-auto bg-white p-8 rounded-xl shadow-sm border border-gray-100 prose prose-blue">
+        <h1>Termos de Uso e Política de Privacidade</h1>
+        <p><em>Última atualização: Outubro de 2026</em></p>
+        <p>Estes Termos de Uso e Política de Privacidade regem o acesso e uso das plataformas educacionais. Ao marcar a caixa de concordância no momento do cadastro, você expressa seu consentimento livre, expresso e informado com estas regras.</p>
+        
+        <h2>PARTE I: TERMOS DE USO</h2>
+        
+        <h3>1. Natureza do Serviço</h3>
+        <p>A Plataforma é uma ferramenta de <strong>assistência pedagógica baseada em Inteligência Artificial</strong>. Ela <strong>não substitui</strong> o julgamento humano, a avaliação profissional do educador ou a responsabilidade legal da instituição de ensino. Toda sugestão (notas, planos de aula, diagnósticos) fornecida pela IA é considerada um <strong>rascunho</strong> e requer validação expressa do educador responsável.</p>
+        
+        <h3>2. Responsabilidade sobre Direitos Autorais (Lei 9.610/98)</h3>
+        <p>Ao realizar upload de materiais (PDFs, livros, textos, imagens), o Usuário declara ter os direitos autorais necessários ou a devida licença de uso para fins educacionais. A Plataforma não se responsabiliza por infrações de direitos autorais cometidas pelos usuários e não utiliza obras protegidas de terceiros para o treinamento de modelos fundacionais próprios.</p>
+        
+        <h3>3. Idade Mínima e Capacidade Legal</h3>
+        <p>Em conformidade com o Estatuto da Criança e do Adolescente (Lei 8.069/90 e Lei 15.211/2025 - ECA Digital), o uso direto da Plataforma por menores de 18 anos exige a supervisão e o consentimento expresso de pais ou responsáveis legais, declarado obrigatoriamente no ato do cadastro.</p>
+        
+        <h2>PARTE II: POLÍTICA DE PRIVACIDADE (LGPD)</h2>
+        <p>Em conformidade com a Lei Geral de Proteção de Dados (Lei 13.709/2018).</p>
+        
+        <h3>1. Papéis e Responsabilidades</h3>
+        <ul>
+          <li><strong>Controlador de Dados:</strong> A Instituição de Ensino ou o Educador (cliente contratante), que decide quais dados serão inseridos na Plataforma.</li>
+          <li><strong>Operador de Dados:</strong> A Plataforma, que processa os dados estritamente sob as diretrizes do Controlador e destes Termos.</li>
+        </ul>
+        
+        <h3>2. Coleta e Minimização de Dados</h3>
+        <p>Coletamos apenas os dados estritamente necessários para o funcionamento pedagógico:</p>
+        <ul>
+          <li><strong>Educadores:</strong> Nome, e-mail, instituição.</li>
+          <li><strong>Alunos:</strong> Recomendamos o uso exclusivo de identificadores anônimos (ex: "Aluno A", "ID 123"). Caso nomes sejam fornecidos, a Plataforma aplica anonimização sistêmica automática (substituição de PIIs) antes do processamento por Inteligência Artificial.</li>
+        </ul>
+        
+        <h3>3. Dados Sensíveis e de Menores (ECA/LGPD)</h3>
+        <p>A Plataforma não coleta biometria persistente. Arquivos de voz são processados de forma volátil (<em>on-the-fly</em>) para transcrição e imediatamente deletados dos nossos servidores, não havendo armazenamento permanente.</p>
+        
+        <h3>4. Compartilhamento com Terceiros e Transferência Internacional</h3>
+        <p>Para fornecer as funcionalidades de IA, utilizamos APIs de terceiros (ex: OpenAI, Groq). O compartilhamento ocorre sob protocolos de anonimização prévia. Possuímos acordos de <em>Zero Data Retention</em> com estes parceiros, garantindo que os dados acadêmicos dos usuários <strong>não sejam utilizados para o treinamento de novos modelos de IA</strong>.</p>
+        
+        <h3>5. Retenção e Exclusão de Dados</h3>
+        <p>Por segurança e para evitar a manutenção indefinida de histórico de menores, a Plataforma possui uma política de retenção limitada. Dados de desempenho acadêmico (notas, missões, planos de aula) são automaticamente apagados após 6 (seis) meses de inatividade ou ao término do ano letivo, podendo ser excluídos a qualquer momento pelo usuário através de sua conta.</p>
+        
+        <h3>6. Segurança da Informação</h3>
+        <p>Utilizamos criptografia padrão de mercado (AES-256) para armazenamento em banco de dados e isolamento de informações (<em>Row Level Security</em>), assegurando que usuários só tenham acesso aos dados de suas respectivas contas ou instituições.</p>
+        
+        <h3>7. Direitos do Titular (Art. 18, LGPD)</h3>
+        <p>Você tem direito à confirmação, acesso, correção, anonimização ou exclusão dos seus dados. Qualquer solicitação referente aos dados dos alunos deve ser intermediada pelo Educador/Instituição de Ensino (Controlador).</p>
+      </div>
+    </div>
+  );
+}
+
+
+--- ARQUIVO: frontend/src/components/VoiceRecorder.tsx (432 linhas) ---
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+import { useAuth } from "@clerk/nextjs";
+import { Mic, Square, Loader2, Volume2 } from "lucide-react";
+
+interface VoiceRecorderProps {
+  profile: "KIDS" | "EJA" | "PCD";
+  animationsEnabled?: boolean;
+}
+
+const SUGGESTIONS: Record<"KIDS" | "EJA" | "PCD", string[]> = {
+  KIDS: ["Bola", "Gato", "Casa", "Sapo", "Escola", "Pipoca"],
+  PCD: ["Casa", "Água", "Livro", "Mesa", "Escola", "Amigo"],
+  EJA: ["Trabalho", "Saúde", "Mercado", "Ônibus", "Família", "Documento"],
+};
+
+export default function VoiceRecorder({ profile, animationsEnabled = true }: VoiceRecorderProps) {
+  const { getToken } = useAuth();
+  const [isStarting, setIsStarting] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [transcription, setTranscription] = useState("");
+  const [studentSaid, setStudentSaid] = useState("");
+  const [contextHistory, setContextHistory] = useState("");
+  const [isConversationMode, setIsConversationMode] = useState(false);
+  
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const mimeTypeRef = useRef<string>("audio/webm");
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const silenceStartRef = useRef<number | null>(null);
+  const hasSpokenRef = useRef<boolean>(false);
+  const rafRef = useRef<number | null>(null);
+  const isHandsFreeRef = useRef<boolean>(false);
+  // Limpeza ao desmontar componente
+  useEffect(() => {
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
+
+  const startRecording = async () => {
+    if (isStarting || isRecording || isProcessing) return;
+    setIsStarting(true);
+    setRecordingSeconds(0);
+    setTranscription("");
+    setStudentSaid("");
+    hasSpokenRef.current = false;
+    silenceStartRef.current = null;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      streamRef.current = stream;
+
+      let chosenMime = "audio/webm";
+      if (typeof MediaRecorder !== "undefined") {
+        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+          chosenMime = "audio/webm;codecs=opus";
+        } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+          chosenMime = "audio/webm";
+        } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
+          chosenMime = "audio/mp4";
+        } else if (MediaRecorder.isTypeSupported("audio/ogg")) {
+          chosenMime = "audio/ogg";
+        }
+      }
+      mimeTypeRef.current = chosenMime;
+
+      const mediaRecorder = new MediaRecorder(stream, chosenMime ? { mimeType: chosenMime } : undefined);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        setIsProcessing(true);
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+          streamRef.current = null;
+        }
+
+        const actualMime = mimeTypeRef.current.split(";")[0].trim() || "audio/webm";
+        const audioBlob = new Blob(audioChunksRef.current, { type: actualMime });
+        
+        if (audioBlob.size < 350) {
+          setTranscription("O áudio ficou muito curtinho ou sem som. Clique no microfone, fale com calma e clique para enviar!");
+          setIsProcessing(false);
+          return;
+        }
+
+        await sendAudioToBackend(audioBlob, actualMime);
+      };
+
+      mediaRecorder.start();
+      setIsStarting(false);
+      setIsRecording(true);
+
+      timerIntervalRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+
+      // --- VAD: Voice Activity Detection (Auto-stop) ---
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioCtx;
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+      
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      
+      const checkAudioLevel = () => {
+        if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") return;
+        
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+        const average = sum / dataArray.length;
+
+        if (average > 15) {
+          // Voz detectada
+          hasSpokenRef.current = true;
+          silenceStartRef.current = null;
+        } else {
+          // Silêncio
+          if (!silenceStartRef.current) silenceStartRef.current = Date.now();
+          
+          // Se já falou e agora silenciou por 1.6s -> encerra e envia sem gravar ruído residual
+          if (hasSpokenRef.current && Date.now() - silenceStartRef.current > 1600) {
+            stopRecording();
+            return;
+          }
+          // No modo mãos livres, se ainda nem falou após 7s de silêncio -> para para não prender
+          if (isHandsFreeRef.current && !hasSpokenRef.current && Date.now() - silenceStartRef.current > 7000) {
+            stopRecording();
+            return;
+          }
+        }
+        rafRef.current = requestAnimationFrame(checkAudioLevel);
+      };
+      
+      checkAudioLevel();
+      // ------------------------------------------------
+
+    } catch (error) {
+      console.error("Erro ao acessar microfone:", error);
+      setIsStarting(false);
+      alert("Permissão de microfone necessária para aprender a ler!");
+    }
+  };
+
+  const stopRecording = () => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") return;
+
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(()=>{});
+      audioContextRef.current = null;
+    }
+
+    setIsRecording(false);
+
+    try {
+      mediaRecorderRef.current.stop();
+    } catch {}
+  };
+
+  const sendAudioToBackend = async (audioBlob: Blob, actualMime: string) => {
+    const ext = actualMime.includes("mp4")
+      ? "mp4"
+      : actualMime.includes("ogg")
+      ? "ogg"
+      : actualMime.includes("wav")
+      ? "wav"
+      : "webm";
+
+    const formData = new FormData();
+    formData.append("audio_file", audioBlob, `voice_input.${ext}`);
+    formData.append("profile", profile);
+    formData.append("last_ai_response", contextHistory);
+
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://alfabetiza-ai-production.up.railway.app";
+      const token = await getToken();
+      const response = await fetch(`${API_URL}/api/voice/chat`, { method: "POST", body: formData, headers: { Authorization: `Bearer ${token}` } });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error("Erro na API de Voz:", response.status, errText);
+        if (response.status === 429) {
+          setTranscription("Você já conversou bastante hoje! Volte amanhã para continuar aprendendo.");
+          return;
+        }
+        throw new Error("Falha na API de Voz");
+      }
+      const data = await response.json();
+      setTranscription(data.transcription_or_reasoning);
+      if (data.student_transcription && !data.student_transcription.startsWith("[")) {
+        setStudentSaid(data.student_transcription);
+        const cleanWord = data.student_transcription.trim().replace(/[^a-zA-ZÀ-ÿ]/g, "");
+        if (cleanWord.length >= 1) {
+          fetch("/api/progress", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              letra: cleanWord[0].toUpperCase(),
+              silaba: cleanWord.slice(0, 2).toUpperCase(),
+              palavraLida: cleanWord.length >= 3,
+              minutos: 1,
+            }),
+          }).catch(() => {});
+        }
+      }
+      
+      // Mantém histórico recente limpo (no máximo 3 rodadas) para não poluir o raciocínio da IA
+      setContextHistory(prev => {
+        const turn = `Aluno: ${data.student_transcription || "..."}\nProfessor: ${data.transcription_or_reasoning}`;
+        const lines = (prev ? `${prev}\n${turn}` : turn).split("\n").filter(Boolean);
+        return lines.slice(-6).join("\n");
+      });
+
+      if (data.audio_base64) {
+        const audioSrc = `data:${data.mime_type};base64,${data.audio_base64}`;
+        const audioPlayer = new Audio(audioSrc);
+        audioPlayer.onended = () => {
+           if (isHandsFreeRef.current) {
+              startRecording();
+           }
+        };
+        audioPlayer.play().catch((err) => console.warn("Autoplay impedido:", err));
+      } else {
+        // Se a IA não retornou áudio (ex: erro silencioso)
+        if (isHandsFreeRef.current) {
+           setTimeout(() => startRecording(), 1000);
+        }
+      }
+    } catch (error) {
+      setTranscription("Ops! Tivemos um problema de conexão. Tente novamente.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Adaptação Visual do Botão baseado no Perfil
+  const getButtonStyles = () => {
+    if (profile === "KIDS") {
+      if (isRecording) return "bg-red-500 scale-110 shadow-[0_0_40px_rgba(239,68,68,0.7)] animate-pulse ring-4 ring-red-300";
+      if (isStarting || isProcessing) return "bg-blue-400 animate-bounce";
+      return "bg-gradient-to-tr from-green-400 to-emerald-500 hover:scale-105 shadow-xl hover:shadow-green-400/50";
+    }
+    if (profile === "PCD") {
+      if (isRecording) return "bg-red-500 ring-4 ring-red-200";
+      if (isStarting || isProcessing) return "bg-blue-300 opacity-90";
+      return "bg-teal-600 hover:bg-teal-700 opacity-90 transition-colors shadow-md";
+    }
+    if (profile === "EJA") {
+      if (isRecording) return "bg-red-600 ring-4 ring-red-200 animate-pulse";
+      if (isStarting || isProcessing) return "bg-slate-500";
+      return "bg-slate-800 hover:bg-slate-700 transition-all shadow-md";
+    }
+    return "bg-slate-800";
+  };
+
+  const formatTimer = (totalSeconds: number) => {
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center w-full max-w-md mx-auto space-y-8">
+      
+      {/* Botão de Gravação Principal */}
+      <button 
+        type="button"
+        disabled={isProcessing || isStarting}
+        onClick={() => {
+          if (isRecording) {
+            if (isConversationMode) {
+              setIsConversationMode(false);
+              isHandsFreeRef.current = false;
+            }
+            stopRecording();
+          } else if (!isProcessing && !isStarting) {
+            startRecording();
+          }
+        }}
+        className={`w-32 h-32 md:w-40 md:h-40 rounded-full flex flex-col items-center justify-center transition-all duration-300 cursor-pointer ${getButtonStyles()}`}
+      >
+        {isRecording ? (
+          <>
+            <Square className="w-12 h-12 md:w-16 md:h-16 text-white fill-white mb-1" />
+            <span className="text-white font-mono text-xs font-bold tracking-wider">
+              {formatTimer(recordingSeconds)}
+            </span>
+          </>
+        ) : isStarting ? (
+          <Loader2 className="w-12 h-12 md:w-16 md:h-16 text-white animate-spin" />
+        ) : isProcessing ? (
+          <Loader2 className={`w-12 h-12 md:w-16 md:h-16 text-white ${animationsEnabled ? "animate-spin" : ""}`} />
+        ) : (
+          <Mic className="w-14 h-14 md:w-20 md:h-20 text-white" />
+        )}
+      </button>
+
+      {/* Label Instrucional Adaptativo */}
+      <div className="text-center px-4 space-y-1">
+        <p className={`font-semibold ${
+          profile === "PCD" ? "text-xl text-teal-900 tracking-wide" : 
+          profile === "EJA" ? "text-xl text-slate-700 font-serif" : 
+          "text-2xl text-sky-800 font-bold"
+        }`}>
+          {isStarting 
+            ? "Ligando microfone..."
+            : isRecording 
+            ? isConversationMode
+              ? "Pode falar agora! O microfone enviará automaticamente quando houver silêncio."
+              : "Pode falar agora! Clique no botão quadrado para enviar."
+            : isProcessing 
+            ? "A IA está ouvindo sua voz..."
+            : "Clique no microfone para falar"}
+        </p>
+
+        {/* Toggle HandsFree */}
+        <button 
+          onClick={() => {
+             const newVal = !isConversationMode;
+             setIsConversationMode(newVal);
+             isHandsFreeRef.current = newVal;
+             if (newVal && !isRecording && !isStarting && !isProcessing) {
+                startRecording();
+             }
+          }}
+          className={`px-4 py-2 mt-4 rounded-full font-bold text-sm transition-all border-2 ${isConversationMode ? 'bg-sky-100 border-sky-400 text-sky-700 shadow-inner' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+        >
+           {isConversationMode ? '🎙️ Modo Mãos Livres: ATIVADO' : 'Ativar Modo Mãos Livres (Automático)'}
+        </button>
+
+        {isRecording && (
+          <p className="text-xs font-bold text-red-500 uppercase tracking-widest animate-pulse">
+            ● Gravando ({formatTimer(recordingSeconds)})
+          </p>
+        )}
+      </div>
+
+      {/* Sugestões rápidas de palavras */}
+      <div className="w-full text-center space-y-2">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          Sugestões para falar no microfone:
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {SUGGESTIONS[profile].map((word) => (
+            <button
+              key={word}
+              type="button"
+              onClick={() => {
+                setStudentSaid("");
+                setContextHistory(`Professor: Vamos aprender a palavra ${word}! Diga ${word} no microfone.`);
+                setTranscription(`Vamos praticar a palavra "${word.toUpperCase()}"! Clique no microfone e fale: ${word.toUpperCase()}.`);
+              }}
+              className="px-3.5 py-1.5 rounded-full text-xs md:text-sm font-bold bg-white/80 hover:bg-white text-slate-700 border border-slate-200 shadow-sm transition-all cursor-pointer active:scale-95"
+            >
+              {word}
+            </button>
+          ))}
+          {contextHistory && (
+            <button
+              type="button"
+              onClick={() => {
+                setContextHistory("");
+                setStudentSaid("");
+                setTranscription("Conversa reiniciada! Clique no microfone e diga qualquer palavra que queira aprender.");
+              }}
+              className="px-3.5 py-1.5 rounded-full text-xs md:text-sm font-bold bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 shadow-sm transition-all cursor-pointer"
+            >
+              🔄 Novo Tema
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Caixa de Transcrição / Resposta da IA */}
+      {(studentSaid || transcription) && (
+        <div className={`w-full p-6 rounded-3xl transition-opacity duration-500 ${
+          profile === "KIDS" 
+            ? "bg-white shadow-xl border-4 border-yellow-300 text-2xl font-bold text-sky-900" 
+            : profile === "EJA"
+            ? "bg-white border border-slate-300 text-xl text-slate-800 shadow-sm rounded-xl font-serif"
+            : "bg-[#FDFBF7] border-2 border-teal-200 text-xl leading-loose tracking-wider text-slate-800 shadow-sm"
+        }`}>
+          {studentSaid && (
+            <div className="mb-3 pb-3 border-b border-black/10 flex items-center gap-2 text-sm md:text-base font-semibold opacity-80">
+              <span>🗣️ Você falou:</span>
+              <span className="italic font-normal">"{studentSaid}"</span>
+            </div>
+          )}
+          {transcription && (
+            <div className="flex items-start gap-4">
+              <Volume2 className={profile === "KIDS" ? "text-yellow-500 w-8 h-8 shrink-0 animate-pulse" : profile === "EJA" ? "text-slate-500 w-6 h-6 shrink-0" : "text-teal-600 w-6 h-6 shrink-0"} />
+              <p className="whitespace-pre-line leading-relaxed">{transcription}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+--- ARQUIVO: frontend/src/lib/db.ts (120 linhas) ---
+import postgres from 'postgres'
+
+const connectionString = process.env.DATABASE_URL!
+
+export const sql = postgres(connectionString, {
+  ssl: process.env.NODE_ENV === 'production' ? 'require' : false,
+  max: 10,
+})
+
+export async function upsertUserProfile(
+  userId: string,
+  perfil: string,
+  email?: string | null,
+  fullName?: string | null
+) {
+  return await sql`
+    INSERT INTO alfabetiza_profiles (id, perfil, email, full_name, updated_at)
+    VALUES (${userId}, ${perfil}, ${email ?? null}, ${fullName ?? null}, NOW())
+    ON CONFLICT (id) DO UPDATE SET 
+      perfil = EXCLUDED.perfil,
+      email = COALESCE(EXCLUDED.email, alfabetiza_profiles.email),
+      full_name = COALESCE(EXCLUDED.full_name, alfabetiza_profiles.full_name),
+      updated_at = NOW()
+    RETURNING *;
+  `
+}
+
+export async function getUserProfile(userId: string) {
+  const rows = await sql`
+    SELECT * FROM alfabetiza_profiles WHERE id = ${userId} LIMIT 1
+  `
+  return rows[0] || null
+}
+
+export async function setUserProStatus(
+  userId: string,
+  isPro: boolean,
+  planType: string = 'family',
+  subscriptionId?: string | null
+) {
+  // Garante que as colunas existem se a migration ainda não rodou
+  await sql`
+    ALTER TABLE alfabetiza_profiles 
+    ADD COLUMN IF NOT EXISTS is_pro BOOLEAN DEFAULT false,
+    ADD COLUMN IF NOT EXISTS plan_type TEXT DEFAULT 'free',
+    ADD COLUMN IF NOT EXISTS subscription_id TEXT;
+  `.catch(() => {})
+
+  return await sql`
+    UPDATE alfabetiza_profiles 
+    SET is_pro = ${isPro}, plan_type = ${planType}, subscription_id = ${subscriptionId ?? null}, updated_at = NOW()
+    WHERE id = ${userId}
+    RETURNING *;
+  `
+}
+
+export async function ensureProgressTable() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS alfabetiza_progress (
+      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      letras_aprendidas TEXT[] DEFAULT '{}',
+      silabas_aprendidas TEXT[] DEFAULT '{}',
+      palavras_lidas INTEGER DEFAULT 0,
+      minutos_estudo INTEGER DEFAULT 0,
+      ultima_sessao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+  `.catch(() => {})
+}
+
+export async function getUserProgress(userId: string) {
+  await ensureProgressTable()
+  const rows = await sql`
+    SELECT * FROM alfabetiza_progress WHERE user_id = ${userId} LIMIT 1
+  `
+  if (rows.length > 0) return rows[0]
+
+  const inserted = await sql`
+    INSERT INTO alfabetiza_progress (user_id, letras_aprendidas, silabas_aprendidas, palavras_lidas, minutos_estudo)
+    VALUES (${userId}, ARRAY['A', 'E', 'I', 'O', 'U'], ARRAY['BA', 'BE'], 0, 0)
+    RETURNING *;
+  `
+  return inserted[0]
+}
+
+export async function saveUserProgress(
+  userId: string,
+  data: { letra?: string; silaba?: string; palavraLida?: boolean; minutos?: number }
+) {
+  await ensureProgressTable()
+  const current = await getUserProgress(userId)
+
+  let letras: string[] = current.letras_aprendidas || []
+  if (data.letra && !letras.includes(data.letra.toUpperCase())) {
+    letras = [...letras, data.letra.toUpperCase()]
+  }
+
+  let silabas: string[] = current.silabas_aprendidas || []
+  if (data.silaba && !silabas.includes(data.silaba.toUpperCase())) {
+    silabas = [...silabas, data.silaba.toUpperCase()]
+  }
+
+  const palavrasLidas = (current.palavras_lidas || 0) + (data.palavraLida ? 1 : 0)
+  const minutos = (current.minutos_estudo || 0) + (data.minutos || 1)
+
+  const updated = await sql`
+    UPDATE alfabetiza_progress
+    SET 
+      letras_aprendidas = ${letras},
+      silabas_aprendidas = ${silabas},
+      palavras_lidas = ${palavrasLidas},
+      minutos_estudo = ${minutos},
+      ultima_sessao = NOW()
+    WHERE user_id = ${userId}
+    RETURNING *;
+  `
+  return updated[0]
+}
+
+
+
+--- ARQUIVO: frontend/src/middleware.ts (28 linhas) ---
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
+import { NextResponse } from 'next/server'
+
+const isPublicRoute = createRouteMatcher([
+  '/',
+  '/login(.*)',
+  '/signup(.*)',
+  '/api/tts(.*)',
+  '/termos(.*)',
+  '/privacidade(.*)'
+])
+
+export default clerkMiddleware(async (auth, request) => {
+  if (!isPublicRoute(request)) {
+    const { userId } = await auth()
+    if (!userId) {
+      const signInUrl = new URL('/login', request.url)
+      return NextResponse.redirect(signInUrl)
+    }
+  }
+})
+
+export const config = {
+  matcher: [
+    '/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
+    '/(api|trpc)(.*)',
+  ],
+}
+
+
+--- ARQUIVO: frontend/test_jsx.js (17 linhas) ---
+const fs = require('fs');
+const content = fs.readFileSync('src/components/VoiceRecorder.tsx', 'utf8');
+let stack = [];
+let regex = /<\/?([a-zA-Z0-9\.]+)[^>]*>/g;
+let match;
+while ((match = regex.exec(content)) !== null) {
+  let tag = match[1];
+  let full = match[0];
+  if (full.endsWith('/>')) continue;
+  if (full.startsWith('</')) {
+    if (stack.length > 0 && stack[stack.length - 1] === tag) stack.pop();
+    else console.log("Mismatched close:", full, "expected", stack[stack.length - 1], "at index", match.index);
+  } else {
+    stack.push(tag);
+  }
+}
+console.log("Remaining stack:", stack);
+
+
+--- ARQUIVO: frontend/tsconfig.json (34 linhas) ---
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": ["node_modules"]
+}
+
+
+--- ARQUIVO: patch_alfabetiza_login.py (83 linhas) ---
+import os
+
+filepath = "/home/ivarr/Documentos/AGY - Development/alfabetiza-ai/frontend/src/app/login/page.tsx"
+
+new_content = """'use client'
+
+import { SignIn } from '@clerk/nextjs'
+import Link from 'next/link'
+import { BookOpen, ArrowLeft } from 'lucide-react'
+
+export default function LoginPage() {
+  return (
+    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-[#FAF9F6] font-sans text-slate-800">
+      {/* LEFT */}
+      <div className="hidden lg:flex lg:col-span-5 relative bg-blue-950 p-12 flex-col justify-between overflow-hidden">
+        {/* Imagem de Fundo (Opcional, com overlay escuro) */}
+        <div className="absolute inset-0 opacity-20 mix-blend-overlay">
+          <img 
+            src="https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop" 
+            alt="Fundo escola"
+            className="w-full h-full object-cover grayscale"
+          />
+        </div>
+
+        <div className="relative z-10 flex items-center gap-3">
+          <div className="w-10 h-10 bg-white/10 rounded-lg flex items-center justify-center backdrop-blur-sm">
+            <BookOpen className="w-5 h-5 text-amber-500" />
+          </div>
+          <span className="font-serif text-white text-2xl font-bold tracking-tight">
+            Alfabetiza<span className="text-amber-500">AÍ</span>
+          </span>
+        </div>
+
+        <div className="relative z-10 space-y-6 my-auto max-w-sm">
+          <h2 className="text-4xl font-serif font-bold text-white leading-tight">
+            Bem-vindo à sala de aula do futuro.
+          </h2>
+          <p className="text-blue-100/80 text-base leading-relaxed font-medium">
+            Acompanhe o desenvolvimento da leitura com a ajuda de uma inteligência artificial criada para o ritmo de cada criança.
+          </p>
+        </div>
+
+        <div className="relative z-10 text-xs text-blue-200/50 pt-6">
+          © {new Date().getFullYear()} AÍ Tecnologia e Educação.
+        </div>
+      </div>
+
+      {/* RIGHT */}
+      <div className="lg:col-span-7 flex flex-col justify-between p-6 sm:p-12">
+        <div className="flex items-center justify-between mb-8">
+          <Link href="/" className="inline-flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-blue-900 transition-colors">
+            <ArrowLeft className="w-4 h-4" /> Voltar para o início
+          </Link>
+        </div>
+
+        <div className="w-full max-w-md mx-auto my-auto flex justify-center py-6">
+          <SignIn
+            routing="hash"
+            forceRedirectUrl="/onboarding"
+            appearance={{
+              elements: {
+                rootBox: "w-full",
+                card: "shadow-2xl shadow-blue-900/5 border border-slate-200 rounded-3xl w-full",
+                headerTitle: "font-serif text-2xl font-bold text-blue-950",
+                headerSubtitle: "text-slate-500",
+                socialButtonsBlockButton: "rounded-xl border-slate-200",
+                formButtonPrimary: "bg-blue-900 hover:bg-blue-800 rounded-xl",
+                footer: "hidden",
+              }
+            }}
+          />
+        </div>
+        <div />
+      </div>
+    </div>
+  )
+}
+"""
+
+with open(filepath, "w") as f:
+    f.write(new_content)
+
+print("Login page updated successfully!")
+
+
+--- ARQUIVO: patch_alfabetiza_page.py (146 linhas) ---
+import os
+
+filepath = "/home/ivarr/Documentos/AGY - Development/alfabetiza-ai/frontend/src/app/page.tsx"
+
+new_content = """'use client'
+
+import Link from 'next/link'
+import { BookOpen, ArrowRight, CheckCircle2, Heart, Mic, Users, Shield, PlayCircle } from 'lucide-react'
+import { motion } from 'framer-motion'
+
+const fadeIn = {
+  hidden: { opacity: 0, y: 20 },
+  visible: (i: number) => ({ opacity: 1, y: 0, transition: { delay: i * 0.1, duration: 0.6, ease: [0.16, 1, 0.3, 1] } })
+}
+
+export default function LandingPage() {
+  return (
+    <div className="min-h-screen bg-[#FAF9F6] text-slate-800 font-sans selection:bg-amber-200">
+      
+      {/* NAVBAR */}
+      <header className="sticky top-0 z-50 w-full border-b border-slate-200/50 bg-[#FAF9F6]/90 backdrop-blur-md">
+        <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-blue-900 rounded-lg flex items-center justify-center">
+              <BookOpen className="w-5 h-5 text-white" />
+            </div>
+            <span className="font-serif text-2xl font-bold tracking-tight text-blue-950">
+              Alfabetiza<span className="text-amber-600">AÍ</span>
+            </span>
+          </div>
+          <div className="flex items-center gap-4">
+            <Link href="/login">
+              <button className="px-6 py-2.5 text-sm font-semibold bg-white border border-slate-300 text-slate-700 rounded-full hover:bg-slate-50 transition-colors">
+                Área do Professor
+              </button>
+            </Link>
+            <Link href="/login">
+              <button className="px-6 py-2.5 text-sm font-semibold bg-blue-900 hover:bg-blue-800 text-white rounded-full transition-colors">
+                Entrar na Aula
+              </button>
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      {/* HERO */}
+      <section className="relative pt-20 pb-24 lg:pt-32 lg:pb-32 overflow-hidden">
+        <div className="max-w-6xl mx-auto px-6 grid lg:grid-cols-2 gap-16 items-center">
+          
+          <div className="space-y-8 max-w-2xl">
+            <motion.div initial="hidden" animate="visible" custom={0} variants={fadeIn}>
+              <div className="inline-flex items-center gap-2 bg-amber-100/50 text-amber-800 text-sm font-medium px-4 py-2 rounded-full">
+                <Heart className="w-4 h-4 text-amber-600" />
+                <span>Pedagogia aliada à Tecnologia</span>
+              </div>
+            </motion.div>
+
+            <motion.h1 initial="hidden" animate="visible" custom={1} variants={fadeIn}
+              className="text-5xl lg:text-6xl font-serif font-bold text-blue-950 leading-[1.1]">
+              Aprender a ler no <span className="italic text-amber-600">seu próprio ritmo.</span>
+            </motion.h1>
+
+            <motion.p initial="hidden" animate="visible" custom={2} variants={fadeIn}
+              className="text-lg text-slate-600 leading-relaxed font-medium">
+              Desenvolvemos uma tutoria por voz que escuta, entende e acompanha cada criança, respeitando o tempo de aprendizado humano. Construído por educadores, potencializado pela Inteligência Artificial.
+            </motion.p>
+
+            <motion.div initial="hidden" animate="visible" custom={3} variants={fadeIn}
+              className="flex flex-col sm:flex-row gap-4 pt-4">
+              <Link href="/login">
+                <button className="w-full sm:w-auto h-14 px-8 text-base rounded-full bg-blue-900 text-white hover:bg-blue-800 font-semibold flex items-center justify-center gap-2 transition-colors">
+                  Acessar Plataforma <ArrowRight className="w-5 h-5" />
+                </button>
+              </Link>
+              <button className="w-full sm:w-auto h-14 px-8 text-base rounded-full bg-white border-2 border-slate-200 text-blue-950 hover:border-slate-300 font-semibold flex items-center justify-center gap-2 transition-colors">
+                <PlayCircle className="w-5 h-5 text-amber-600" /> Ver como funciona
+              </button>
+            </motion.div>
+
+            <motion.div initial="hidden" animate="visible" custom={4} variants={fadeIn}
+              className="flex flex-wrap items-center gap-6 text-sm text-slate-500 font-medium pt-4">
+              <span className="flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-emerald-600" /> 100% por voz</span>
+              <span className="flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-emerald-600" /> Ambiente Seguro</span>
+              <span className="flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-emerald-600" /> Relatórios para Educadores</span>
+            </motion.div>
+          </div>
+
+          <motion.div initial="hidden" animate="visible" custom={2} variants={fadeIn} className="relative hidden lg:block">
+            {/* Espaço para foto humana real ou ilustração editorial */}
+            <div className="aspect-[4/5] rounded-3xl overflow-hidden bg-slate-200 relative">
+              <img 
+                src="https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop" 
+                alt="Criança aprendendo"
+                className="object-cover w-full h-full opacity-90"
+              />
+              <div className="absolute inset-0 bg-blue-900/10 mix-blend-multiply"></div>
+            </div>
+            
+            {/* Card flutuante para dar aquele ar de "produto real" */}
+            <div className="absolute -left-12 bottom-12 bg-white p-6 rounded-2xl shadow-xl max-w-xs border border-slate-100">
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                  <Mic className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-blue-950">"Muito bem! A letra M com A faz MA."</p>
+                  <p className="text-xs text-slate-500 mt-1">Interação em tempo real</p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+
+        </div>
+      </section>
+
+      {/* METODOLOGIA */}
+      <section className="py-24 bg-white border-y border-slate-200">
+        <div className="max-w-6xl mx-auto px-6 text-center max-w-3xl">
+          <h2 className="text-3xl lg:text-4xl font-serif font-bold text-blue-950 mb-6">Feito por pessoas, para pessoas.</h2>
+          <p className="text-lg text-slate-600 leading-relaxed">
+            Acreditamos que a tecnologia nunca vai substituir o toque humano na educação. Nossa plataforma é uma ferramenta de apoio que utiliza o que há de mais moderno em IA para escalar o cuidado, a paciência e a atenção individualizada.
+          </p>
+        </div>
+      </section>
+
+      {/* FOOTER */}
+      <footer className="bg-[#FAF9F6] py-12">
+        <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-blue-900 rounded-md flex items-center justify-center text-white">
+              <BookOpen className="w-4 h-4" />
+            </div>
+            <span className="font-serif font-bold text-blue-950 text-xl">Alfabetiza<span className="text-amber-600">AÍ</span></span>
+          </div>
+          <p className="text-slate-500 text-sm font-medium">© {new Date().getFullYear()} AÍ Tecnologia e Educação. Todos os direitos reservados.</p>
+        </div>
+      </footer>
+    </div>
+  )
+}
+"""
+
+with open(filepath, "w") as f:
+    f.write(new_content)
+
+print("Page updated successfully!")
+
+
+--- ARQUIVO: patch_alfabetiza_signup.py (83 linhas) ---
+import os
+
+filepath = "/home/ivarr/Documentos/AGY - Development/alfabetiza-ai/frontend/src/app/signup/page.tsx"
+
+new_content = """'use client'
+
+import { SignUp } from '@clerk/nextjs'
+import Link from 'next/link'
+import { BookOpen, ArrowLeft } from 'lucide-react'
+
+export default function SignupPage() {
+  return (
+    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-12 bg-[#FAF9F6] font-sans text-slate-800">
+      {/* LEFT */}
+      <div className="hidden lg:flex lg:col-span-5 relative bg-blue-950 p-12 flex-col justify-between overflow-hidden">
+        {/* Imagem de Fundo (Opcional, com overlay escuro) */}
+        <div className="absolute inset-0 opacity-20 mix-blend-overlay">
+          <img 
+            src="https://images.unsplash.com/photo-1503676260728-1c00da094a0b?q=80&w=2022&auto=format&fit=crop" 
+            alt="Fundo escola"
+            className="w-full h-full object-cover grayscale"
+          />
+        </div>
+
+        <div className="relative z-10 flex items-center gap-3">
+          <div className="w-10 h-10 bg-white/10 rounded-lg flex items-center justify-center backdrop-blur-sm">
+            <BookOpen className="w-5 h-5 text-amber-500" />
+          </div>
+          <span className="font-serif text-white text-2xl font-bold tracking-tight">
+            Alfabetiza<span className="text-amber-500">AÍ</span>
+          </span>
+        </div>
+
+        <div className="relative z-10 space-y-6 my-auto max-w-sm">
+          <h2 className="text-4xl font-serif font-bold text-white leading-tight">
+            A leitura começa com um "Oi".
+          </h2>
+          <p className="text-blue-100/80 text-base leading-relaxed font-medium">
+            Crie sua conta e permita que nossa IA acompanhe a jornada de aprendizado do zero à primeira palavra.
+          </p>
+        </div>
+
+        <div className="relative z-10 text-xs text-blue-200/50 pt-6">
+          © {new Date().getFullYear()} AÍ Tecnologia e Educação.
+        </div>
+      </div>
+
+      {/* RIGHT */}
+      <div className="lg:col-span-7 flex flex-col justify-between p-6 sm:p-12">
+        <div className="flex items-center justify-between mb-8">
+          <Link href="/" className="inline-flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-blue-900 transition-colors">
+            <ArrowLeft className="w-4 h-4" /> Voltar para o início
+          </Link>
+        </div>
+
+        <div className="w-full max-w-md mx-auto my-auto flex justify-center py-6">
+          <SignUp
+            routing="hash"
+            signInUrl="/login"
+            forceRedirectUrl="/onboarding"
+            appearance={{
+              elements: {
+                rootBox: "w-full",
+                card: "shadow-2xl shadow-blue-900/5 border border-slate-200 rounded-3xl w-full",
+                headerTitle: "font-serif text-2xl font-bold text-blue-950",
+                headerSubtitle: "text-slate-500",
+                socialButtonsBlockButton: "rounded-xl border-slate-200",
+                formButtonPrimary: "bg-blue-900 hover:bg-blue-800 rounded-xl",
+              }
+            }}
+          />
+        </div>
+        <div />
+      </div>
+    </div>
+  )
+}
+"""
+
+with open(filepath, "w") as f:
+    f.write(new_content)
+
+print("Signup page updated successfully!")
+
+
+--- ARQUIVO: supabase/migrations/20260914_create_alfabetiza_schema.sql (59 linhas) ---
+-- Schema Alfabetiza AÍ
+CREATE SCHEMA IF NOT EXISTS alfabetiza_ai;
+
+-- Tabela de Perfis
+CREATE TABLE IF NOT EXISTS alfabetiza_ai.profiles (
+    id UUID REFERENCES auth.users(id) PRIMARY KEY,
+    perfil VARCHAR(50) NOT NULL CHECK (perfil IN ('KIDS', 'EJA', 'PCD')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Habilitar RLS (Row Level Security)
+ALTER TABLE alfabetiza_ai.profiles ENABLE ROW LEVEL SECURITY;
+
+-- Políticas de RLS para perfis
+CREATE POLICY "Usuários podem ver o próprio perfil"
+    ON alfabetiza_ai.profiles
+    FOR SELECT
+    USING (auth.uid() = id);
+
+CREATE POLICY "Usuários podem atualizar o próprio perfil"
+    ON alfabetiza_ai.profiles
+    FOR UPDATE
+    USING (auth.uid() = id);
+
+CREATE POLICY "Usuários podem inserir o próprio perfil"
+    ON alfabetiza_ai.profiles
+    FOR INSERT
+    WITH CHECK (auth.uid() = id);
+
+-- Tabela de Progresso/Métricas
+CREATE TABLE IF NOT EXISTS alfabetiza_ai.progress (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID REFERENCES alfabetiza_ai.profiles(id) NOT NULL,
+    letras_aprendidas TEXT[] DEFAULT '{}',
+    silabas_aprendidas TEXT[] DEFAULT '{}',
+    palavras_lidas INTEGER DEFAULT 0,
+    minutos_estudo INTEGER DEFAULT 0,
+    ultima_sessao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- RLS Progresso
+ALTER TABLE alfabetiza_ai.progress ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Usuários podem ver próprio progresso"
+    ON alfabetiza_ai.progress
+    FOR SELECT
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Usuários podem atualizar próprio progresso"
+    ON alfabetiza_ai.progress
+    FOR UPDATE
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Usuários podem inserir próprio progresso"
+    ON alfabetiza_ai.progress
+    FOR INSERT
+    WITH CHECK (auth.uid() = user_id);
+
+
+--- ARQUIVO: supabase/migrations/20260914_fix_alfabetiza_public_schema.sql (71 linhas) ---
+-- ==============================================================================
+-- Migration: Suporte Oficial ao Alfabetiza AÍ no Schema Public
+-- Evita erro PGRST106 de schemas customizados não expostos no PostgREST
+-- ==============================================================================
+
+-- 1. Garante que a tabela de perfis existe no schema public
+CREATE TABLE IF NOT EXISTS public.alfabetiza_profiles (
+    id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+    perfil VARCHAR(50) NOT NULL CHECK (perfil IN ('KIDS', 'EJA', 'PCD')),
+    full_name TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Habilita RLS
+ALTER TABLE public.alfabetiza_profiles ENABLE ROW LEVEL SECURITY;
+
+-- Políticas de RLS para alfabetiza_profiles
+DROP POLICY IF EXISTS "Usuários podem ver o próprio perfil alfabetiza" ON public.alfabetiza_profiles;
+CREATE POLICY "Usuários podem ver o próprio perfil alfabetiza"
+    ON public.alfabetiza_profiles FOR SELECT
+    USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Usuários podem inserir o próprio perfil alfabetiza" ON public.alfabetiza_profiles;
+CREATE POLICY "Usuários podem inserir o próprio perfil alfabetiza"
+    ON public.alfabetiza_profiles FOR INSERT
+    WITH CHECK (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Usuários podem atualizar o próprio perfil alfabetiza" ON public.alfabetiza_profiles;
+CREATE POLICY "Usuários podem atualizar o próprio perfil alfabetiza"
+    ON public.alfabetiza_profiles FOR UPDATE
+    USING (auth.uid() = id);
+
+-- 2. Tabela de progresso no schema public
+CREATE TABLE IF NOT EXISTS public.alfabetiza_progress (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+    letras_aprendidas TEXT[] DEFAULT '{}',
+    silabas_aprendidas TEXT[] DEFAULT '{}',
+    palavras_lidas INTEGER DEFAULT 0,
+    minutos_estudo INTEGER DEFAULT 0,
+    ultima_sessao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE public.alfabetiza_progress ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Usuários podem ver próprio progresso alfabetiza" ON public.alfabetiza_progress;
+CREATE POLICY "Usuários podem ver próprio progresso alfabetiza"
+    ON public.alfabetiza_progress FOR SELECT
+    USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Usuários podem inserir próprio progresso alfabetiza" ON public.alfabetiza_progress;
+CREATE POLICY "Usuários podem inserir próprio progresso alfabetiza"
+    ON public.alfabetiza_progress FOR INSERT
+    WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Usuários podem atualizar próprio progresso alfabetiza" ON public.alfabetiza_progress;
+CREATE POLICY "Usuários podem atualizar próprio progresso alfabetiza"
+    ON public.alfabetiza_progress FOR UPDATE
+    USING (auth.uid() = user_id);
+
+-- 3. Adiciona coluna perfil em public.profiles se a tabela existir
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'profiles') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'perfil') THEN
+            ALTER TABLE public.profiles ADD COLUMN perfil VARCHAR(50);
+        END IF;
+    END IF;
+END $$;
+
+
+--- ARQUIVO: supabase/migrations/20261005_data_retention_and_rls.sql (15 linhas) ---
+-- =========================================================================
+-- REFORÇO DE ROW LEVEL SECURITY (RLS) - PRIVACIDADE DOS ALUNOS
+-- =========================================================================
+
+ALTER TABLE alfabetiza_ai.progress ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Usuários podem ler apenas seu próprio progresso" ON alfabetiza_ai.progress;
+CREATE POLICY "Usuários podem ler apenas seu próprio progresso"
+ON alfabetiza_ai.progress FOR SELECT
+USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Usuários podem deletar apenas seu próprio progresso" ON alfabetiza_ai.progress;
+CREATE POLICY "Usuários podem deletar apenas seu próprio progresso"
+ON alfabetiza_ai.progress FOR DELETE
+USING (auth.uid() = user_id);
+

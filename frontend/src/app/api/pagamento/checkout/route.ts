@@ -38,23 +38,34 @@ export async function POST(req: Request) {
       'Content-Type': 'application/json',
     }
 
-    // 1. Criar ou obter cliente no Asaas
-    const custRes = await fetch(`${ASAAS_URL}/customers`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ name, email, cpfCnpj: cpfCnpjRaw }),
-    })
-
-    if (!custRes.ok) {
-      const err = await custRes.json().catch(() => ({}))
-      console.error('Erro Asaas customers:', err)
-      return NextResponse.json({ error: 'Erro ao cadastrar cliente no Asaas.' }, { status: 400 })
+    // 1. Buscar cliente existente pelo CPF/CNPJ ou criar novo no Asaas
+    let customerId: string | null = null
+    const searchRes = await fetch(`${ASAAS_URL}/customers?cpfCnpj=${cpfCnpjRaw}`, { headers })
+    if (searchRes.ok) {
+      const searchData = await searchRes.json().catch(() => ({}))
+      if (searchData?.data?.length > 0) {
+        customerId = searchData.data[0].id
+      }
     }
 
-    const custData = await custRes.json()
-    const customerId = custData.id
+    if (!customerId) {
+      const custRes = await fetch(`${ASAAS_URL}/customers`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ name, email, cpfCnpj: cpfCnpjRaw }),
+      })
 
-    // 2. Criar cobrança PIX com vencimento amanhã
+      if (!custRes.ok) {
+        const err = await custRes.json().catch(() => ({}))
+        const firstErr = err?.errors?.[0]?.description || 'Erro ao cadastrar CPF/CNPJ no Asaas.'
+        return NextResponse.json({ error: firstErr }, { status: 400 })
+      }
+
+      const custData = await custRes.json()
+      customerId = custData.id
+    }
+
+    // 2. Criar cobrança UNDEFINED (permite PIX, Cartão de Crédito e Boleto na fatura Asaas)
     const tomorrow = new Date()
     tomorrow.setDate(tomorrow.getDate() + 1)
     const dueDate = tomorrow.toISOString().split('T')[0]
@@ -64,7 +75,7 @@ export async function POST(req: Request) {
       headers,
       body: JSON.stringify({
         customer: customerId,
-        billingType: 'PIX',
+        billingType: 'UNDEFINED',
         value,
         dueDate,
         description,
@@ -74,30 +85,31 @@ export async function POST(req: Request) {
 
     if (!payRes.ok) {
       const err = await payRes.json().catch(() => ({}))
-      console.error('Erro Asaas payments:', err)
-      return NextResponse.json({ error: 'Erro ao gerar cobrança Asaas.' }, { status: 400 })
+      const firstErr = err?.errors?.[0]?.description || 'Erro ao gerar cobrança no Asaas.'
+      return NextResponse.json({ error: firstErr }, { status: 400 })
     }
 
     const payData = await payRes.json()
     const paymentId = payData.id
+    const invoiceUrl = payData.invoiceUrl
 
-    // 3. Obter QR Code PIX
-    const qrRes = await fetch(`${ASAAS_URL}/payments/${paymentId}/pixQrCode`, {
-      headers,
-    })
-
-    if (!qrRes.ok) {
-      return NextResponse.json({ error: 'Erro ao obter QR Code PIX.' }, { status: 400 })
+    // 3. Obter QR Code PIX imediato
+    let qrCode: string | null = null
+    let payload: string | null = null
+    const qrRes = await fetch(`${ASAAS_URL}/payments/${paymentId}/pixQrCode`, { headers })
+    if (qrRes.ok) {
+      const qrData = await qrRes.json().catch(() => ({}))
+      qrCode = qrData.encodedImage || null
+      payload = qrData.payload || null
     }
-
-    const qrData = await qrRes.json()
 
     return NextResponse.json({
       paymentId,
+      invoiceUrl,
       value,
       cycle,
-      qrCode: qrData.encodedImage,
-      payload: qrData.payload,
+      qrCode,
+      payload,
     })
   } catch (error: any) {
     console.error('Erro em /api/pagamento/checkout:', error)

@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&family=Fraunces:ital,opsz,wght@0,9..144,700;0,9..144,900;1,9..144,700&display=swap" rel="stylesheet">
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html, body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #090d16;
+        color: #ffffff;
+        font-family: 'Inter', sans-serif;
+      }
+      .clip {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 1920px;
+        height: 1080px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        padding: 80px;
+      }
+      .serif {
+        font-family: 'Fraunces', serif;
+      }
+      .bg-scene1 {
+        background: radial-gradient(circle at 50% 40%, #172554 0%, #090d16 75%);
+      }
+      .bg-scene2 {
+        background: radial-gradient(circle at 50% 30%, #0c4a6e 0%, #090d16 80%);
+      }
+      .bg-scene3 {
+        background: radial-gradient(circle at 50% 50%, #1e1b4b 0%, #090d16 80%);
+      }
+      .bg-scene4 {
+        background: radial-gradient(circle at 50% 45%, #172554 0%, #090d16 78%);
+      }
+      .pill-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        background: #1e293b;
+        border: 2px solid #38bdf8;
+        color: #f8fafc;
+        padding: 14px 32px;
+        border-radius: 999px;
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 32px;
+      }
+      .gold {
+        color: #fbbf24;
+      }
+      .sky {
+        color: #38bdf8;
+      }
+      .emerald {
+        color: #34d399;
+      }
+      .hero-title {
+        font-size: 92px;
+        font-weight: 900;
+        line-height: 1.08;
+        text-align: center;
+        letter-spacing: -0.03em;
+        color: #ffffff;
+        max-width: 1500px;
+      }
+      .sub-title {
+        font-size: 40px;
+        font-weight: 600;
+        color: #e2e8f0;
+        text-align: center;
+        margin-top: 28px;
+        max-width: 1200px;
+      }
+      /* Scene 2 UI Window */
+      .studio-board {
+        width: 1560px;
+        background: #0f172a;
+        border: 3px solid #334155;
+        border-radius: 40px;
+        padding: 56px 64px;
+        display: grid;
+        grid-template-columns: 520px 1fr;
+        gap: 56px;
+        align-items: center;
+        box-shadow: 0 30px 60px rgba(0, 0, 0, 0.65);
+      }
+      .mic-panel {
+        background: #1e293b;
+        border: 2px solid #475569;
+        border-radius: 32px;
+        padding: 44px 32px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 24px;
+      }
+      .mic-circle {
+        width: 170px;
+        height: 170px;
+        border-radius: 999px;
+        background: #059669;
+        border: 6px solid #6ee7b7;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 72px;
+        font-weight: 900;
+        color: #ffffff;
+      }
+      .spoken-pill {
+        background: #0f172a;
+        border: 2px solid #38bdf8;
+        border-radius: 20px;
+        padding: 16px 28px;
+        font-size: 28px;
+        font-weight: 800;
+        color: #ffffff;
+        text-align: center;
+      }
+      .lesson-stage {
+        display: flex;
+        flex-direction: column;
+        gap: 28px;
+      }
+      .xp-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .xp-badge {
+        background: #78350f;
+        border: 2px solid #fbbf24;
+        color: #fef3c7;
+        font-size: 26px;
+        font-weight: 800;
+        padding: 10px 26px;
+        border-radius: 999px;
+      }
+      .syllable-row {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+      }
+      .syl-box {
+        background: #1e293b;
+        border: 4px solid #38bdf8;
+        color: #ffffff;
+        font-size: 68px;
+        font-weight: 900;
+        padding: 24px 48px;
+        border-radius: 28px;
+      }
+      .syl-word {
+        background: #065f46;
+        border: 4px solid #34d399;
+        color: #ffffff;
+        font-size: 68px;
+        font-weight: 900;
+        padding: 24px 56px;
+        border-radius: 28px;
+      }
+      .tutor-bubble {
+        background: #1e293b;
+        border-left: 10px solid #fbbf24;
+        padding: 28px 36px;
+        border-radius: 24px;
+        font-size: 32px;
+        font-weight: 700;
+        color: #f8fafc;
+        line-height: 1.35;
+      }
+      /* Scene 3 Mode Cards */
+      .modes-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 36px;
+        width: 1620px;
+        margin-top: 48px;
+      }
+      .mode-card {
+        background: #0f172a;
+        border: 3px solid #334155;
+        border-radius: 32px;
+        padding: 44px 38px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .mode-tag {
+        display: inline-block;
+        align-self: flex-start;
+        padding: 10px 22px;
+        border-radius: 999px;
+        font-size: 22px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .tag-kids {
+        background: #0c4a6e;
+        color: #e0f2fe;
+        border: 2px solid #38bdf8;
+      }
+      .tag-pcd {
+        background: #134e4a;
+        color: #ccfbf1;
+        border: 2px solid #2dd4bf;
+      }
+      .tag-eja {
+        background: #78350f;
+        color: #fef3c7;
+        border: 2px solid #fbbf24;
+      }
+      .mode-title {
+        font-size: 44px;
+        font-weight: 900;
+        color: #ffffff;
+      }
+      .mode-desc {
+        font-size: 28px;
+        font-weight: 600;
+        color: #cbd5e1;
+        line-height: 1.4;
+      }
+      /* Scene 4 CTA */
+      .brand-lockup {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        background: #0f172a;
+        border: 3px solid #fbbf24;
+        padding: 28px 56px;
+        border-radius: 32px;
+        margin-bottom: 44px;
+      }
+      .brand-icon {
+        width: 76px;
+        height: 76px;
+        border-radius: 20px;
+        background: #1d4ed8;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 40px;
+        font-weight: 900;
+      }
+      .brand-name {
+        font-size: 64px;
+        font-weight: 900;
+        color: #ffffff;
+        letter-spacing: -0.02em;
+      }
+      .cta-footer {
+        margin-top: 40px;
+        background: #1e293b;
+        border: 2px solid #475569;
+        padding: 18px 42px;
+        border-radius: 999px;
+        font-size: 30px;
+        font-weight: 700;
+        color: #f8fafc;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="20" data-width="1920" data-height="1080">
+
+      <!-- Audio Tracks -->
+      <audio id="bg-music" data-start="0" data-duration="20" data-track-index="10" data-volume="0.35" src="assets/music/happy-beats-business-moves-vol-1-by-ende-dot-app.mp3"></audio>
+      <audio id="sfx-hook" data-start="0.2" data-duration="1" data-track-index="11" data-volume="0.75" src="assets/sfx/interface/drop_001.ogg"></audio>
+      <audio id="sfx-reveal" data-start="1.9" data-duration="1.5" data-track-index="12" data-volume="0.80" src="assets/sfx/impact/impactSoft_medium_001.ogg"></audio>
+      <audio id="sfx-mic" data-start="4.2" data-duration="1" data-track-index="13" data-volume="0.75" src="assets/sfx/interface/click_002.ogg"></audio>
+      <audio id="sfx-syl" data-start="5.8" data-duration="1.2" data-track-index="14" data-volume="0.80" src="assets/sfx/casino/chips-collide-1.ogg"></audio>
+      <audio id="sfx-cards" data-start="9.8" data-duration="1.2" data-track-index="15" data-volume="0.75" src="assets/sfx/casino/card-slide-1.ogg"></audio>
+      <audio id="sfx-outro" data-start="15.3" data-duration="2" data-track-index="16" data-volume="0.85" src="assets/sfx/impact/impactBell_heavy_000.ogg"></audio>
+
+      <!-- Scene 1: Hook & Reveal (0s - 4s) -->
+      <div id="scene1" class="clip bg-scene1" data-start="0" data-duration="4" data-track-index="0">
+        <div id="s1-hook" style="display:flex; flex-direction:column; align-items:center;">
+          <div class="pill-badge">Pedagogia + Inteligência Artificial</div>
+          <h1 class="hero-title serif">Como ensinar a ler quem ainda<br>não consegue ler a tela?</h1>
+        </div>
+        <div id="s1-reveal" style="position:absolute; display:flex; flex-direction:column; align-items:center; opacity:0;">
+          <div class="pill-badge">Tutoria 100% por Voz</div>
+          <h1 class="hero-title serif">Escutando cada sílaba.<br><span class="gold">Alfabetiza AÍ.</span></h1>
+          <p class="sub-title">Aprender a ler no seu próprio ritmo.</p>
+        </div>
+      </div>
+
+      <!-- Scene 2: Interactive Voice & Syllable Engine (4s - 9.5s) -->
+      <div id="scene2" class="clip bg-scene2" data-start="4" data-duration="5.5" data-track-index="0">
+        <div class="studio-board" id="s2-board">
+          <div class="mic-panel" id="s2-mic">
+            <div class="mic-circle" id="s2-mic-btn">VOZ</div>
+            <div style="font-size:24px; font-weight:800; color:#6ee7b7; letter-spacing:0.06em;">● GRAVANDO SEM CLIQUES (VAD)</div>
+            <div class="spoken-pill" id="s2-spoken">Você falou: "GA - TO"</div>
+          </div>
+          <div class="lesson-stage">
+            <div class="xp-row" id="s2-xp">
+              <span style="font-size:28px; font-weight:800; color:#38bdf8; text-transform:uppercase;">Módulo 2 · Livro Interativo</span>
+              <span class="xp-badge">★ +100 XP · Perfeito!</span>
+            </div>
+            <div class="syllable-row">
+              <div class="syl-box" id="s2-syl1">GA</div>
+              <span style="font-size:56px; font-weight:900; color:#94a3b8;">+</span>
+              <div class="syl-box" id="s2-syl2">TO</div>
+              <span style="font-size:56px; font-weight:900; color:#34d399;">=</span>
+              <div class="syl-word" id="s2-word">GATO</div>
+            </div>
+            <div class="tutor-bubble" id="s2-tutor">
+              "Incrível! Você juntou o G com A (GA) e o T com O (TO). Vamos para a próxima palavra?"
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scene 3: 3 Adaptive Modes (9.5s - 15s) -->
+      <div id="scene3" class="clip bg-scene3" data-start="9.5" data-duration="5.5" data-track-index="0">
+        <h1 class="hero-title serif" id="s3-title" style="font-size:72px;">Três mundos adaptados<br>para <span class="sky">cada jornada.</span></h1>
+        <div class="modes-grid">
+          <div class="mode-card" id="s3-card1">
+            <span class="mode-tag tag-kids">5 a 8 Anos</span>
+            <div class="mode-title">Modo Criança</div>
+            <p class="mode-desc">Lúdico, vibrante e acolhedor. Divisão silábica falada com exemplos de brincadeiras e animais.</p>
+          </div>
+          <div class="mode-card" id="s3-card2">
+            <span class="mode-tag tag-pcd">Neurodivergência</span>
+            <div class="mode-title">Modo Inclusão</div>
+            <p class="mode-desc">Foco em TEA, TDAH e Dislexia. Baixo estímulo visual, instruções literais e previsibilidade.</p>
+          </div>
+          <div class="mode-card" id="s3-card3">
+            <span class="mode-tag tag-eja">Jovens e Adultos</span>
+            <div class="mode-title">Modo Adulto (EJA)</div>
+            <p class="mode-desc">Dignidade e zero infantilização. Leitura aplicada ao trabalho, saúde, transporte e cidadania.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scene 4: Payoff & CTA (15s - 20s) -->
+      <div id="scene4" class="clip bg-scene4" data-start="15" data-duration="5" data-track-index="0">
+        <div class="brand-lockup" id="s4-brand">
+          <div class="brand-icon">AÍ</div>
+          <div class="brand-name serif">Alfabetiza<span class="gold">AÍ</span></div>
+        </div>
+        <h1 class="hero-title serif" id="s4-cta1" style="font-size:84px;">Aprender a ler no <span class="gold">seu próprio ritmo.</span></h1>
+        <p class="sub-title" id="s4-cta2">100% por voz · Ambiente seguro LGPD/ECA · Acompanhamento real</p>
+        <div class="cta-footer" id="s4-footer">Uma solução <span class="sky">AÍ Tecnologia</span> · alfabetiza-ai.vercel.app</div>
+      </div>
+
+    </div>
+
+    <script>
+      const tl = gsap.timeline({ paused: true });
+
+      // Scene 1 (0.0s - 4.0s)
+      tl.from("#s1-hook", { opacity: 0, y: 40, scale: 0.94, duration: 0.55, ease: "power3.out" }, 0.15);
+      tl.to("#s1-hook", { opacity: 0, y: -30, duration: 0.35, ease: "power2.in" }, 1.75);
+      tl.fromTo("#s1-reveal",
+        { opacity: 0, scale: 0.92, y: 30 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.55, ease: "back.out(1.4)" },
+        1.95
+      );
+
+      // Scene 2 (4.0s - 9.5s)
+      tl.from("#s2-board", { opacity: 0, y: 50, duration: 0.5, ease: "power3.out" }, 4.1);
+      tl.from("#s2-mic-btn", { scale: 0.7, opacity: 0, duration: 0.45, ease: "back.out(1.8)" }, 4.3);
+      tl.from("#s2-spoken", { opacity: 0, y: 20, duration: 0.4, ease: "power2.out" }, 4.8);
+      tl.from("#s2-syl1", { opacity: 0, scale: 0.6, duration: 0.35, ease: "back.out(1.7)" }, 5.2);
+      tl.from("#s2-syl2", { opacity: 0, scale: 0.6, duration: 0.35, ease: "back.out(1.7)" }, 5.5);
+      tl.from("#s2-word", { opacity: 0, scale: 0.75, duration: 0.45, ease: "back.out(2)" }, 5.85);
+      tl.from("#s2-xp", { opacity: 0, y: -15, duration: 0.35 }, 6.1);
+      tl.from("#s2-tutor", { opacity: 0, x: 30, duration: 0.45, ease: "power2.out" }, 6.4);
+
+      // Scene 3 (9.5s - 15.0s)
+      tl.from("#s3-title", { opacity: 0, y: 30, duration: 0.45, ease: "power2.out" }, 9.65);
+      tl.from("#s3-card1", { opacity: 0, y: 45, duration: 0.45, ease: "power3.out" }, 10.0);
+      tl.from("#s3-card2", { opacity: 0, y: 45, duration: 0.45, ease: "power3.out" }, 10.5);
+      tl.from("#s3-card3", { opacity: 0, y: 45, duration: 0.45, ease: "power3.out" }, 11.0);
+
+      // Scene 4 (15.0s - 20.0s)
+      tl.from("#s4-brand", { opacity: 0, scale: 0.8, duration: 0.5, ease: "back.out(1.7)" }, 15.2);
+      tl.from("#s4-cta1", { opacity: 0, y: 35, duration: 0.5, ease: "power3.out" }, 15.6);
+      tl.from("#s4-cta2", { opacity: 0, y: 20, duration: 0.45, ease: "power2.out" }, 16.1);
+      tl.from("#s4-footer", { opacity: 0, scale: 0.9, duration: 0.45, ease: "back.out(1.4)" }, 16.5);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

@@ -1,0 +1,34 @@
+================================================================================
+CERTIFICADO DE RESUMO DIGITAL HASH PARA PROTOCOLO NO INPI (SISTEMA e-SOFTWARE)
+================================================================================
+Titular: Aí Tecnologia e Educação Ltda. ("AÍ")
+Programa: ALFABETIZA AÍ — Plataforma de Alfabetização Assistida por Inteligência Artificial com Interface 100% Conversacional (Voice-First) e Adaptação EJA/KIDS/PCD
+Data de Geração do Pacote: 2026-10-27 12:43:35 UTC
+Total de Arquivos-Fonte Incluídos: 43 arquivos
+Total de Linhas de Código/Documentação: 3803 linhas
+Documento de Patente Formatado (IN 30/2013): PEDIDO_PATENTE_INPI_ALFABETIZA_AI.docx (39,360 bytes)
+
+--------------------------------------------------------------------------------
+1. PACOTE CONSOLIDADO (.ZIP) — RECOMENDADO PARA GUARDA LEGAL E REGISTRO
+--------------------------------------------------------------------------------
+Arquivo: alfabetiza_ai_codigo_fonte_inpi.zip
+Tamanho: 112,647 bytes
+Algoritmo INPI (Campo "Algoritmo Hash"): SHA-512
+Resumo Digital Hash (SHA-512):
+93f3ddb0c42447f77a55a186534ae90b72f201b5b400ed14d14db5dd498b3052a30bfe0a3b1bc1c511408ad4be7921ed7a697dbfde7ab8dd72a251873559c409
+
+Resumo Digital Alternativo (SHA-256):
+990d81859fae3ac78f98b38ed5a2c86d5efb22c04c5c714544a25e2a0983e687
+
+--------------------------------------------------------------------------------
+2. LISTAGEM INTEGRAL EM TEXTO (.TXT)
+--------------------------------------------------------------------------------
+Arquivo: alfabetiza_ai_listagem_codigo_fonte.txt
+Tamanho: 172,127 bytes
+Algoritmo INPI (Campo "Algoritmo Hash"): SHA-512
+Resumo Digital Hash (SHA-512):
+cb107f4a58ac2636210a879eda9be9f56fc2a0567024cd88fea16bb7ff04340b6b237171975b6636a4409f5dcdbb27cd78a7860580d11c2da92ee851f8f7ac8a
+
+Resumo Digital Alternativo (SHA-256):
+c219e9302270fa6a7d1fca9635a4cb6a7ca15221fea885d4e52e3e3597fae28c
+================================================================================
